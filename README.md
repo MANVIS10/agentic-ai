@@ -19,13 +19,19 @@ how the code evolved. Concepts build on each other — don't skip ahead.
 | 9 | `stage9_simple_memory/` | Stage 1's chatbot plus `remember: <text>` / `recall` backed by a JSON file on disk | Long-term memory vs. per-thread graph state |
 | 10 | `stage10_multi_tool_agent/` | Stage 2's flat chat loop, but with all four tools from Stages 2-5 bound together so the LLM picks whichever fits | Tool selection, isolated from planning/composition |
 | 11 | `stage11_research_agent/` | Stage 2's agent narrowed to one tool (web search) plus a system prompt naming it a "Research Agent" | Specialization - a declared role + narrow toolset, vs. a generalist |
+| 12 | `stage12_two_specialist_agents/` | Two independent specialists (Research Agent, Knowledge Agent), Stage 11's pattern repeated with different tools, picked by a hard-coded prefix | Proving specialization generalizes - two agents coexisting with zero shared state |
+| 13 | `stage13_supervisor/` | Same two specialists, now as subgraphs inside one outer graph with a supervisor node routing between them | Structured LLM output + conditional edge on a routing field |
+| 14 | `stage14_critic/` | Same supervisor + specialists, plus a critic node that reviews the answer and can send one bounded retry back to the same specialist | A second structured-output node judging quality, plus a bounded retry loop (conditional edge routing backward) |
 
 `stage4_web_fetch`, `stage5_pdf_fetch`, `stage6_planner`, and
 `stage7_human_in_loop` are follow-on tool stages built by request rather
 than the original numbered slots below (`stage4_planner` was the original
 name for what's now `stage6_planner`; `stage5_human_in_loop` was the
-original name for what's now `stage7_human_in_loop`; the multi-agent slot
-is still open — see `PROGRESS.md` for the up-to-date picture).
+original name for what's now `stage7_human_in_loop`). Stages 12-14 follow
+the same pattern against the project spec's own numbering (spec "Stage 11 —
+Specialist Agents" -> `stage12_two_specialist_agents`, spec "Stage 12 —
+Supervisor" -> `stage13_supervisor`, spec "Stage 13 — Critic" ->
+`stage14_critic`) — see `PROGRESS.md` for the up-to-date picture.
 
 Each folder has its own `README.md` with the full breakdown: what was
 added, the concept it demonstrates, its architecture, how to run it, and
@@ -65,8 +71,20 @@ adjacent concepts are taught together within a single stage folder:
 - Stage 11 covers specialization - Stage 2's loop narrowed to one tool
   (web search) plus a system prompt declaring the agent's identity and
   job, in contrast to Stage 10's generalist multi-tool agent.
-- Supervisor / critic (collaborating subgraphs) are still unbuilt and
-  don't have a folder number assigned yet.
+- Stage 12 covers specialist agents plural - Stage 11's pattern (narrow
+  toolset + declared identity) stamped out twice with different tools, run
+  side by side in one process with zero shared state or communication, and
+  picked by a hard-coded prefix typed by the human.
+- Stage 13 covers a supervisor - a routing node (structured LLM output)
+  placed in front of Stage 12's two specialists (now subgraphs inside one
+  outer graph), replacing the hard-coded prefix with an actual classify-
+  and-route decision.
+- Stage 14 covers a critic - a review node placed after Stage 13's
+  specialists that judges the answer (structured LLM output: pass/retry)
+  and can send one bounded retry back to the same specialist with
+  feedback attached, before the answer is treated as final.
+- The final combined multi-agent system (spec "Stage 14") is still unbuilt
+  and doesn't have a folder number assigned yet.
 
 ## Setup
 
@@ -99,4 +117,7 @@ python stage1_chatbot/main.py
 - [x] Stage 9 (`stage9_simple_memory`)
 - [x] Stage 10 (`stage10_multi_tool_agent`)
 - [x] Stage 11 (`stage11_research_agent`)
-- [ ] Supervisor / critic / multi-agent (unnumbered)
+- [x] Stage 12 (`stage12_two_specialist_agents`)
+- [x] Stage 13 (`stage13_supervisor`)
+- [x] Stage 14 (`stage14_critic`)
+- [ ] Final combined multi-agent system (unnumbered)

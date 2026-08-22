@@ -15,13 +15,18 @@
 | 9 | `stage9_simple_memory/` | — (no tool; `save_memory`/`load_memory` outside the graph) | Stage 1's chatbot plus a JSON-file long-term memory: `remember: <text>` saves a fact, `recall` retrieves it, surviving across threads and process restarts |
 | 10 | `stage10_multi_tool_agent/` | `search_web`, `search_knowledge_base`, `fetch_webpage`, `fetch_pdf` (all four, bound together) | Stage 2's flat `agent -> tools -> agent` chat loop, with all four tools bound so the LLM picks whichever fits each question - no planner, no subtasks |
 | 11 | `stage11_research_agent/` | `search_web` (only) | Stage 2's agent narrowed to one tool plus a `SystemMessage` declaring it a "Research Agent" - specialization instead of tool selection |
+| 12 | `stage12_two_specialist_agents/` | `search_web` (Research Agent) and `search_knowledge_base` (Knowledge Agent), each bound to its own separate graph | Two independent specialists, Stage 11's pattern repeated twice with different tools/identities, picked by a hard-coded prefix in `main()` |
+| 13 | `stage13_supervisor/` | Same two specialists as Stage 12, now as subgraphs inside one outer graph | A supervisor node (structured LLM output) reads the question and routes it to whichever specialist fits, replacing the hard-coded prefix |
+| 14 | `stage14_critic/` | Same two specialists and supervisor as Stage 13 | A critic node reviews the specialist's answer (structured LLM output: pass/retry) and can send one bounded retry back to the *same* specialist with feedback attached |
 
 ## Current tool
 
-None in progress — Stage 11 (`stage11_research_agent`) is finished: Stage
-2's agent narrowed to one tool (`search_web`) with a system prompt naming
-it a "Research Agent," isolating specialization as its own concept
-alongside Stage 10's tool selection.
+None in progress — Stage 14 (`stage14_critic`) is finished: a critic node
+added after Stage 13's supervisor + specialists, reviewing each answer and
+retrying the same specialist (capped at `MAX_RETRIES = 1`) with feedback
+attached before finalizing. This closes out the spec's originally-planned
+concept list (routing -> quality review) short of the final combined
+system.
 
 ## What I learned
 
@@ -102,6 +107,35 @@ alongside Stage 10's tool selection.
   shows the opposite move - deliberately narrowing an agent's options and
   giving it a stated role - is just as cheap to build, and is what a
   future supervisor would need to route work to a named specialist.
+- **Stage 12** — a compiled graph is a self-contained unit that can be
+  stamped out again with different tools/identity and coexist with another
+  one in the same process with zero shared state. Two agents living
+  side by side (separate `ChatOpenAI` instances, separate `MemorySaver`s,
+  separate `thread_id`s) isn't "multi-agent coordination" yet - it's just
+  proof that specialization (Stage 11's pattern) generalizes, and that
+  picking between them can start as a task a human does by hand (typing a
+  prefix) before it becomes something a graph does automatically.
+- **Stage 13** — a compiled `StateGraph` invoked inside another node is
+  indistinguishable from any other function call, so "supervisor routes to
+  a subgraph" needs no special multi-agent API - just a node that runs
+  `some_graph.invoke(...)` and a conditional edge reading a field that node
+  set. `with_structured_output` turns a routing (or judgment) decision into
+  a typed field instead of free text to parse - confirmed directly:
+  `gpt-4o-mini`'s default `"json_schema"` structured-output mode
+  occasionally echoed back the schema itself instead of an instance of it
+  a few turns into a conversation (crashing a dict lookup);
+  `method="function_calling"` fixed it reliably.
+- **Stage 14** — a conditional edge isn't limited to moving forward through
+  a graph; it can route back to a node that already ran, which is what
+  turns "a node that judges output" into "a critic that can force a
+  retry." The loop only stays safe because the retry cap lives inside the
+  node that decides to retry (`critic_node`), not in the conditional edge
+  itself - same principle as Stage 6's `current_index` guard, just
+  capping an LLM's own judgment instead of a fixed subtask list. Also
+  confirmed that a retry is only meaningfully different from asking again
+  if the specialist actually sees *why* it was sent back - reusing
+  `MessagesState`'s own accumulation (previous answer + a new feedback
+  message) was enough, no separate retry-history state needed.
 
 ## Important decisions
 
@@ -177,10 +211,31 @@ alongside Stage 10's tool selection.
   isolated on its own. Kept separate so it can be diffed directly against
   both Stage 2 (same loop, no identity) and Stage 10 (same loop, many
   tools, no identity).
+- **Stage 12 built as `stage12_two_specialist_agents`, matching the spec's
+  "Stage 11 — Specialist Agents" concept but not its folder number.** The
+  spec's own numbering diverged from the on-disk folders back at Stage
+  4-7; Stage 12 continues that pattern rather than renumbering everything
+  that came before it. No supervisor/router/critic was added here on
+  purpose - two agents that *cannot* talk to each other is the
+  prerequisite for a later stage to add coordination on top.
+- **Stage 13 built as `stage13_supervisor`, matching the spec's "Stage 12 —
+  Supervisor" concept.** Same numbering-deviation pattern as Stage 12.
+  Both specialist subgraphs were copied from Stage 12 unchanged - the
+  supervisor is strictly additive, not a rewrite of the specialists.
+- **Stage 14 built as `stage14_critic`, matching the spec's "Stage 13 —
+  Critic" concept.** Same numbering-deviation pattern again. Retry always
+  goes back to the *same* specialist the supervisor originally chose
+  (never back through the supervisor) - a user decision made explicitly
+  before this stage was planned, since re-routing on a weak answer would
+  conflate "wrong specialist" with "right specialist, weak attempt," which
+  are different problems.
 
 ## Next tool
 
-Not yet decided. The remaining candidate from the spec's future-stage
-roadmap (`.claude/spec/spec_document.md`) is a supervisor/critic
-multi-agent system built on top of specialist agents like Stage 11's -
-still unbuilt and without a folder number.
+Not yet decided. Stage 14 (`stage14_critic`) completes the spec's
+originally-planned concept sequence (routing -> quality review). The one
+remaining item from the spec's future-stage roadmap
+(`.claude/spec/spec_document.md`) is "Stage 14 — Final Multi-Agent Research
+Assistant": combining everything built so far (supervisor, specialists,
+critic) into one integrated system, with no new LangGraph mechanism of its
+own - still unbuilt and without a folder number.
