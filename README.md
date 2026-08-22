@@ -18,6 +18,7 @@ how the code evolved. Concepts build on each other — don't skip ahead.
 | 8 | `stage8_research_workflow/` | Reuses Stage 7's plan/approval loop, but each subtask is now researched by a tool-calling agent with all four earlier tools bound together | Composing a compiled graph as a callable inside another graph's node |
 | 9 | `stage9_simple_memory/` | Stage 1's chatbot plus `remember: <text>` / `recall` backed by a JSON file on disk | Long-term memory vs. per-thread graph state |
 | 10 | `stage10_multi_tool_agent/` | Stage 2's flat chat loop, but with all four tools from Stages 2-5 bound together so the LLM picks whichever fits | Tool selection, isolated from planning/composition |
+| 11 | `stage11_research_agent/` | Stage 2's agent narrowed to one tool (web search) plus a system prompt naming it a "Research Agent" | Specialization - a declared role + narrow toolset, vs. a generalist |
 
 `stage4_web_fetch`, `stage5_pdf_fetch`, `stage6_planner`, and
 `stage7_human_in_loop` are follow-on tool stages built by request rather
@@ -61,8 +62,11 @@ adjacent concepts are taught together within a single stage folder:
 - Stage 10 covers tool selection on its own - the same four tools Stage 8
   bound together, but as the whole graph (Stage 2's flat `agent -> tools ->
   agent` loop) instead of one node inside a bigger planner graph.
-- Specialist agents / supervisor / critic (collaborating subgraphs) are
-  still unbuilt and don't have a folder number assigned yet.
+- Stage 11 covers specialization - Stage 2's loop narrowed to one tool
+  (web search) plus a system prompt declaring the agent's identity and
+  job, in contrast to Stage 10's generalist multi-tool agent.
+- Supervisor / critic (collaborating subgraphs) are still unbuilt and
+  don't have a folder number assigned yet.
 
 ## Setup
 
@@ -94,4 +98,5 @@ python stage1_chatbot/main.py
 - [x] Stage 8 (`stage8_research_workflow`)
 - [x] Stage 9 (`stage9_simple_memory`)
 - [x] Stage 10 (`stage10_multi_tool_agent`)
-- [ ] Multi-agent / supervisor / critic (unnumbered)
+- [x] Stage 11 (`stage11_research_agent`)
+- [ ] Supervisor / critic / multi-agent (unnumbered)

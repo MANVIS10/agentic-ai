@@ -14,13 +14,14 @@
 | 8 | `stage8_research_workflow/` | `search_web`, `search_knowledge_base`, `fetch_webpage`, `fetch_pdf` (all four, bound together) | Reuses Stage 7's planner unchanged; each subtask is researched by a small tool-calling agent that picks whichever of the four existing tools fits |
 | 9 | `stage9_simple_memory/` | — (no tool; `save_memory`/`load_memory` outside the graph) | Stage 1's chatbot plus a JSON-file long-term memory: `remember: <text>` saves a fact, `recall` retrieves it, surviving across threads and process restarts |
 | 10 | `stage10_multi_tool_agent/` | `search_web`, `search_knowledge_base`, `fetch_webpage`, `fetch_pdf` (all four, bound together) | Stage 2's flat `agent -> tools -> agent` chat loop, with all four tools bound so the LLM picks whichever fits each question - no planner, no subtasks |
+| 11 | `stage11_research_agent/` | `search_web` (only) | Stage 2's agent narrowed to one tool plus a `SystemMessage` declaring it a "Research Agent" - specialization instead of tool selection |
 
 ## Current tool
 
-None in progress — Stage 10 (`stage10_multi_tool_agent`) is finished: all
-four tools from Stages 2-5 bound to one flat Stage-2-shaped agent, so the
-LLM picks whichever tool fits a given question directly, with no planner
-or subtask breakdown involved.
+None in progress — Stage 11 (`stage11_research_agent`) is finished: Stage
+2's agent narrowed to one tool (`search_web`) with a system prompt naming
+it a "Research Agent," isolating specialization as its own concept
+alongside Stage 10's tool selection.
 
 ## What I learned
 
@@ -93,6 +94,14 @@ or subtask breakdown involved.
   `DuckDuckGoSearchRun`, not the Python variable `search_web` it's
   assigned to), and a plain arithmetic question triggered no tool call at
   all - `tools_condition` routed straight to `END`.
+- **Stage 11** — specialization isn't a new LangGraph mechanism, it's a
+  design choice layered on the same `bind_tools`/`ToolNode`/
+  `tools_condition` loop: fewer tools bound (one instead of many) plus a
+  `SystemMessage` declaring the agent's identity before every LLM call.
+  Stage 10 proved tool *selection* works with many options; Stage 11
+  shows the opposite move - deliberately narrowing an agent's options and
+  giving it a stated role - is just as cheap to build, and is what a
+  future supervisor would need to route work to a named specialist.
 
 ## Important decisions
 
@@ -162,10 +171,16 @@ or subtask breakdown involved.
   concept was never isolated on its own. Stage 10 reuses Stage 2's flat
   loop instead of Stage 8's nested one so tool selection can be seen
   without planning or approval machinery in the way.
+- **Stage 11 built as its own folder, not folded into Stage 2.** Stage 2
+  already had the exact loop and tool Stage 11 reuses, but with no stated
+  role - specialization (narrow toolset + declared identity) was never
+  isolated on its own. Kept separate so it can be diffed directly against
+  both Stage 2 (same loop, no identity) and Stage 10 (same loop, many
+  tools, no identity).
 
 ## Next tool
 
 Not yet decided. The remaining candidate from the spec's future-stage
-roadmap (`.claude/spec/spec_document.md`) is the multi-agent slot
-(planner/researcher/writer/reviewer as collaborating subgraphs) — still
-unbuilt and without a folder number.
+roadmap (`.claude/spec/spec_document.md`) is a supervisor/critic
+multi-agent system built on top of specialist agents like Stage 11's -
+still unbuilt and without a folder number.
