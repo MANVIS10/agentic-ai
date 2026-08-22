@@ -11,15 +11,16 @@
 | 5 | `stage5_pdf_fetch/` | `fetch_pdf` | Agent downloads a PDF and reads its extracted text content |
 | 6 | `stage6_planner/` | — (no tool; plain LLM calls) | Breaks a research question into subtasks, answers each, combines into a final answer |
 | 7 | `stage7_human_in_loop/` | — (no tool; reuses Stage 6's planner) | Shows the research plan and pauses for human y/n approval before any subtask research runs |
+| 8 | `stage8_research_workflow/` | `search_web`, `search_knowledge_base`, `fetch_webpage`, `fetch_pdf` (all four, bound together) | Reuses Stage 7's planner unchanged; each subtask is researched by a small tool-calling agent that picks whichever of the four existing tools fits |
+| 9 | `stage9_simple_memory/` | — (no tool; `save_memory`/`load_memory` outside the graph) | Stage 1's chatbot plus a JSON-file long-term memory: `remember: <text>` saves a fact, `recall` retrieves it, surviving across threads and process restarts |
+| 10 | `stage10_multi_tool_agent/` | `search_web`, `search_knowledge_base`, `fetch_webpage`, `fetch_pdf` (all four, bound together) | Stage 2's flat `agent -> tools -> agent` chat loop, with all four tools bound so the LLM picks whichever fits each question - no planner, no subtasks |
 
 ## Current tool
 
-None in progress — Stage 7 (`stage7_human_in_loop`) is finished: reuses
-Stage 6's planner unchanged, but inserts a `human_approval` node between
-planning and research that calls `interrupt()` once to ask the human to
-approve the whole plan, resumed via `Command(resume=...)`. Approve
-continues into Stage 6's research loop; reject routes straight to `END`
-with no research done.
+None in progress — Stage 10 (`stage10_multi_tool_agent`) is finished: all
+four tools from Stages 2-5 bound to one flat Stage-2-shaped agent, so the
+LLM picks whichever tool fits a given question directly, with no planner
+or subtask breakdown involved.
 
 ## What I learned
 
@@ -72,6 +73,26 @@ with no research done.
   `END` from the conditional edge is enough; `final_answer` just never gets
   set, and the caller checks for its presence rather than the graph needing
   a dedicated "cancelled" state.
+- **Stage 8** — a compiled `StateGraph` is just a callable
+  (`graph.invoke(...)`), so it can be composed into a *different* graph's
+  node exactly like any other function call — no special "subgraph" API or
+  supervisor/agent-of-agents machinery needed for that. Binding several
+  unrelated tools (web search, local retrieval, HTTP fetch, PDF fetch) to
+  one LLM doesn't require the LLM to know which one is "correct" in
+  advance — `tools_condition`/`ToolNode` handle whichever one it picks the
+  same way regardless of how many tools are bound. Confirmed on a
+  solar-vs-wind test question: the model chose `search_knowledge_base` for
+  both definitional subtasks (matching the local docs) rather than
+  reaching for the web, without being told which tool to prefer.
+- **Stage 10** — tool selection doesn't require a planner or a nested
+  subgraph to work; it's a property of `bind_tools` + `tools_condition`
+  regardless of how many tools are bound or where the agent sits in the
+  overall graph. Confirmed with a 3-question smoke test: a knowledge-base
+  question triggered `search_knowledge_base`, a current-events question
+  triggered `duckduckgo_search` (the registered tool name for
+  `DuckDuckGoSearchRun`, not the Python variable `search_web` it's
+  assigned to), and a plain arithmetic question triggered no tool call at
+  all - `tools_condition` routed straight to `END`.
 
 ## Important decisions
 
@@ -116,10 +137,35 @@ with no research done.
   rather than pausing unconditionally before a whole node runs with no
   context — a better fit for approving a specific decision point.
 
+- **Stage 9** — LangGraph state and long-term memory are two unrelated
+  things that happen to both get called "memory." `MemorySaver` state is
+  scoped to one `thread_id` and lives only as long as the checkpointer
+  does; a fact written to a plain JSON file has no `thread_id` and no
+  graph involvement at all, so it survives switching threads or
+  restarting the process entirely. Confirmed directly: `save_memory` in
+  one call, `load_memory` in a separate later call, same fact comes back
+  - no LLM or graph invocation needed to prove the persistence.
+
+## Important decisions (continued)
+
+- **Stage 9 built on Stage 1's chatbot, not Stage 8's tool-calling agent.**
+  The concept being isolated is state vs. long-term memory, not tool
+  selection - reusing the simplest possible graph keeps the new concept
+  from being buried under unrelated machinery.
+- **`remember:`/`recall` handled as plain string checks, not `bind_tools`.**
+  There's no ambiguity about which action to take, so giving the LLM a
+  tool-choice decision here would only add ceremony without teaching
+  anything new.
+- **Stage 10 built as its own folder, not folded into Stage 8.** Stage 8
+  already bound all four tools together, but only as one node inside a
+  bigger plan/approve/research/synthesize graph - the tool-selection
+  concept was never isolated on its own. Stage 10 reuses Stage 2's flat
+  loop instead of Stage 8's nested one so tool selection can be seen
+  without planning or approval machinery in the way.
+
 ## Next tool
 
-Not yet decided. The remaining candidate from the original roadmap is
-`stage6_multi_agent`-equivalent work (planner/researcher/writer/reviewer
-as collaborating subgraphs) — still unbuilt and without a folder number,
-since 4-7 are now all taken by web-fetch, PDF-fetch, planner, and
-human-in-the-loop.
+Not yet decided. The remaining candidate from the spec's future-stage
+roadmap (`.claude/spec/spec_document.md`) is the multi-agent slot
+(planner/researcher/writer/reviewer as collaborating subgraphs) — still
+unbuilt and without a folder number.

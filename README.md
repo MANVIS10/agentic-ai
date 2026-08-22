@@ -15,6 +15,9 @@ how the code evolved. Concepts build on each other — don't skip ahead.
 | 5 | `stage5_pdf_fetch/` | Downloads a PDF and reads its extracted text | Binary content, PDF text extraction |
 | 6 | `stage6_planner/` | Breaks a research question into subtasks, researches each, combines results | Custom state schema, hand-written conditional-edge loop |
 | 7 | `stage7_human_in_loop/` | Shows the research plan and pauses for human y/n approval before any research runs | `interrupt()` / `Command(resume=...)`, pausing and resuming a graph |
+| 8 | `stage8_research_workflow/` | Reuses Stage 7's plan/approval loop, but each subtask is now researched by a tool-calling agent with all four earlier tools bound together | Composing a compiled graph as a callable inside another graph's node |
+| 9 | `stage9_simple_memory/` | Stage 1's chatbot plus `remember: <text>` / `recall` backed by a JSON file on disk | Long-term memory vs. per-thread graph state |
+| 10 | `stage10_multi_tool_agent/` | Stage 2's flat chat loop, but with all four tools from Stages 2-5 bound together so the LLM picks whichever fits | Tool selection, isolated from planning/composition |
 
 `stage4_web_fetch`, `stage5_pdf_fetch`, `stage6_planner`, and
 `stage7_human_in_loop` are follow-on tool stages built by request rather
@@ -46,6 +49,18 @@ adjacent concepts are taught together within a single stage folder:
   human to approve or reject the whole plan, then `Command(resume=...)`
   continuing it (or routing straight to `END` on rejection) — this was
   originally meant to be Stage 5.
+- Stage 8 covers combining existing capabilities — Stage 7's planner is
+  unchanged, but each subtask is now researched by a small tool-calling
+  agent with all four tools from Stages 2-5 bound together, so the model
+  picks whichever tool actually fits each subtask.
+- Stage 9 covers long-term memory — Stage 1's one-node chatbot is
+  unchanged, with `save_memory`/`load_memory` (plain functions, not tools)
+  added alongside it to show a fact on disk outlives `MemorySaver`'s
+  per-thread state, surviving a different `thread_id` or a process
+  restart.
+- Stage 10 covers tool selection on its own - the same four tools Stage 8
+  bound together, but as the whole graph (Stage 2's flat `agent -> tools ->
+  agent` loop) instead of one node inside a bigger planner graph.
 - Specialist agents / supervisor / critic (collaborating subgraphs) are
   still unbuilt and don't have a folder number assigned yet.
 
@@ -76,4 +91,7 @@ python stage1_chatbot/main.py
 - [x] Stage 5 (`stage5_pdf_fetch`)
 - [x] Stage 6 (`stage6_planner`)
 - [x] Stage 7 (`stage7_human_in_loop`)
+- [x] Stage 8 (`stage8_research_workflow`)
+- [x] Stage 9 (`stage9_simple_memory`)
+- [x] Stage 10 (`stage10_multi_tool_agent`)
 - [ ] Multi-agent / supervisor / critic (unnumbered)
