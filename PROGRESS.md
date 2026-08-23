@@ -18,15 +18,14 @@
 | 12 | `stage12_two_specialist_agents/` | `search_web` (Research Agent) and `search_knowledge_base` (Knowledge Agent), each bound to its own separate graph | Two independent specialists, Stage 11's pattern repeated twice with different tools/identities, picked by a hard-coded prefix in `main()` |
 | 13 | `stage13_supervisor/` | Same two specialists as Stage 12, now as subgraphs inside one outer graph | A supervisor node (structured LLM output) reads the question and routes it to whichever specialist fits, replacing the hard-coded prefix |
 | 14 | `stage14_critic/` | Same two specialists and supervisor as Stage 13 | A critic node reviews the specialist's answer (structured LLM output: pass/retry) and can send one bounded retry back to the *same* specialist with feedback attached |
+| 15 | `stage15_analysis_agent/` | `calculate` (safe `ast`-based arithmetic evaluator, its only tool) | A third independent specialist (Stage 11/12's pattern again) for calculations, percentages, and comparisons over numbers given in the conversation — no retrieval, no supervisor wiring |
 
 ## Current tool
 
-None in progress — Stage 14 (`stage14_critic`) is finished: a critic node
-added after Stage 13's supervisor + specialists, reviewing each answer and
-retrying the same specialist (capped at `MAX_RETRIES = 1`) with feedback
-attached before finalizing. This closes out the spec's originally-planned
-concept list (routing -> quality review) short of the final combined
-system.
+None in progress — Stage 15 (`stage15_analysis_agent`) is finished: a
+third standalone specialist agent (Research, Knowledge, now Analysis),
+built and tested independently with no supervisor/critic wiring, matching
+how Stage 11 and Stage 12 were built before Stage 13 added routing.
 
 ## What I learned
 
@@ -136,6 +135,17 @@ system.
   if the specialist actually sees *why* it was sent back - reusing
   `MessagesState`'s own accumulation (previous answer + a new feedback
   message) was enough, no separate retry-history state needed.
+- **Stage 15** — a "compute" tool is exactly as cheap to add as a
+  "retrieve" tool once the specialist pattern exists: same `bind_tools` +
+  `ToolNode` + `tools_condition` loop, just a different kind of function
+  bound to it. Confirmed a safe hand-rolled `ast`-based expression
+  evaluator (no `eval()`) is enough for averages, percentage change, and
+  differences without pulling in a calculator library. Also confirmed the
+  "tool fails gracefully" principle from Stage 4/5 extends here: during
+  manual testing the model tried `calculate("max(120, 340, 210)")`, which
+  the evaluator correctly rejected (no function calls allowed) with an
+  error string rather than a crash, and the agent recovered by computing
+  each value separately and comparing them itself.
 
 ## Important decisions
 
@@ -229,13 +239,22 @@ system.
   before this stage was planned, since re-routing on a weak answer would
   conflate "wrong specialist" with "right specialist, weak attempt," which
   are different problems.
+- **Stage 15 built as `stage15_analysis_agent`, standalone like Stage 11/12
+  were before the supervisor existed.** The spec's Stage 11 concept names
+  three specialists (Research, Knowledge, Analysis); Stages 11-12 only
+  built the first two. Stage 15 builds the third the same way - no
+  supervisor wiring added or touched, so the existing Stage 13 supervisor
+  (which only knows about two specialists) is left completely unmodified.
+  `calculate` uses a hand-rolled `ast`-based safe evaluator rather than a
+  calculator library, to avoid adding a dependency for something this
+  small.
 
 ## Next tool
 
-Not yet decided. Stage 14 (`stage14_critic`) completes the spec's
-originally-planned concept sequence (routing -> quality review). The one
-remaining item from the spec's future-stage roadmap
-(`.claude/spec/spec_document.md`) is "Stage 14 — Final Multi-Agent Research
-Assistant": combining everything built so far (supervisor, specialists,
-critic) into one integrated system, with no new LangGraph mechanism of its
-own - still unbuilt and without a folder number.
+Not yet decided. Stage 15 (`stage15_analysis_agent`) completes the spec's
+three named specialists (Research, Knowledge, Analysis), all still
+standalone with no shared supervisor. Two items remain unbuilt and without
+a folder number: extending Stage 13's supervisor (and Stage 14's critic) to
+route to all three specialists instead of two, and the spec's final
+combined "Stage 14 — Final Multi-Agent Research Assistant"
+(`.claude/spec/spec_document.md`) integrating everything built so far.
