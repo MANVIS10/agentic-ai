@@ -23,6 +23,7 @@ how the code evolved. Concepts build on each other — don't skip ahead.
 | 13 | `stage13_supervisor/` | Same two specialists, now as subgraphs inside one outer graph with a supervisor node routing between them | Structured LLM output + conditional edge on a routing field |
 | 14 | `stage14_critic/` | Same supervisor + specialists, plus a critic node that reviews the answer and can send one bounded retry back to the same specialist | A second structured-output node judging quality, plus a bounded retry loop (conditional edge routing backward) |
 | 15 | `stage15_analysis_agent/` | A third independent specialist (Stage 11/12's pattern again) with one tool, `calculate`, for arithmetic over numbers given in the conversation | A "compute" specialist rather than a "retrieve" one - same graph shape, different kind of tool |
+| 16 | `stage16_three_specialist_supervisor/` | Stage 15's Analysis Agent joins Stage 13/14's supervisor + critic graph, alongside Research and Knowledge | Widening a structured-output routing field from two choices to N, and confirming the critic needs no changes to support it |
 
 `stage4_web_fetch`, `stage5_pdf_fetch`, `stage6_planner`, and
 `stage7_human_in_loop` are follow-on tool stages built by request rather
@@ -91,10 +92,14 @@ adjacent concepts are taught together within a single stage folder:
   and comparisons over numbers given directly in the conversation. Built
   standalone with no supervisor/critic wiring, same as Stage 11/12 were
   before Stage 13 added routing.
+- Stage 16 covers widening the supervisor + critic to a third specialist -
+  Stage 15's Analysis Agent plugs into Stage 13/14's graph with only a
+  wider routing `Literal` and one more entry in each conditional-edge
+  dispatch dict. The critic (Stage 14) needed zero code changes, since it
+  only ever judges a question/answer pair and never special-cases which
+  specialist produced it.
 - The final combined multi-agent system (spec "Stage 14") is still unbuilt
-  and doesn't have a folder number assigned yet, and neither does
-  extending Stage 13's supervisor / Stage 14's critic to route to all
-  three specialists instead of two.
+  and doesn't have a folder number assigned yet.
 
 ## Setup
 
@@ -131,5 +136,5 @@ python stage1_chatbot/main.py
 - [x] Stage 13 (`stage13_supervisor`)
 - [x] Stage 14 (`stage14_critic`)
 - [x] Stage 15 (`stage15_analysis_agent`)
-- [ ] Extend supervisor/critic to route to all three specialists (unnumbered)
+- [x] Stage 16 (`stage16_three_specialist_supervisor`)
 - [ ] Final combined multi-agent system (unnumbered)

@@ -19,13 +19,15 @@
 | 13 | `stage13_supervisor/` | Same two specialists as Stage 12, now as subgraphs inside one outer graph | A supervisor node (structured LLM output) reads the question and routes it to whichever specialist fits, replacing the hard-coded prefix |
 | 14 | `stage14_critic/` | Same two specialists and supervisor as Stage 13 | A critic node reviews the specialist's answer (structured LLM output: pass/retry) and can send one bounded retry back to the *same* specialist with feedback attached |
 | 15 | `stage15_analysis_agent/` | `calculate` (safe `ast`-based arithmetic evaluator, its only tool) | A third independent specialist (Stage 11/12's pattern again) for calculations, percentages, and comparisons over numbers given in the conversation — no retrieval, no supervisor wiring |
+| 16 | `stage16_three_specialist_supervisor/` | Same three specialists as Stage 15 (Research, Knowledge, Analysis), now all as subgraphs inside the Stage 13/14 supervisor+critic graph | Extends Stage 13's supervisor and Stage 14's critic to route to all three specialists instead of two; the critic needed zero code changes since it never special-cased which specialist produced an answer |
 
 ## Current tool
 
-None in progress — Stage 15 (`stage15_analysis_agent`) is finished: a
-third standalone specialist agent (Research, Knowledge, now Analysis),
-built and tested independently with no supervisor/critic wiring, matching
-how Stage 11 and Stage 12 were built before Stage 13 added routing.
+None in progress — Stage 16 (`stage16_three_specialist_supervisor`) is
+finished: the Analysis Agent (Stage 15) is now wired into the existing
+supervisor+critic graph alongside Research and Knowledge, so all three
+specialists are reachable through one routed, reviewed graph instead of
+Analysis being reachable only on its own.
 
 ## What I learned
 
@@ -146,6 +148,18 @@ how Stage 11 and Stage 12 were built before Stage 13 added routing.
   the evaluator correctly rejected (no function calls allowed) with an
   error string rather than a crash, and the agent recovered by computing
   each value separately and comparing them itself.
+- **Stage 16** — a critic written generically (judge the question + latest
+  answer, never the specialist that produced it) scales to more
+  specialists for free: extending Stage 13's supervisor and Stage 14's
+  critic from two specialists to three touched only the routing layer (a
+  wider `Literal`, one more entry in each of the two conditional-edge
+  dispatch dicts) — `critic_node` itself needed no changes. Also confirmed
+  a real limitation of the "wrapper node folds a subgraph result down to
+  its last message" pattern from Stage 13: the outer graph's `messages`
+  state never sees a specialist's intermediate tool-call messages, so
+  proving the Analysis Agent's `calculate` tool was actually invoked
+  required asserting against `analysis_graph` (the specialist subgraph)
+  directly rather than the outer supervisor graph's result.
 
 ## Important decisions
 
@@ -248,13 +262,20 @@ how Stage 11 and Stage 12 were built before Stage 13 added routing.
   `calculate` uses a hand-rolled `ast`-based safe evaluator rather than a
   calculator library, to avoid adding a dependency for something this
   small.
+- **Stage 16 built as `stage16_three_specialist_supervisor`, extending
+  Stage 13/14 rather than replacing them.** Stages 13-15 stay untouched;
+  Stage 16 copies their specialist/supervisor/critic code in and adds the
+  third branch, so earlier stages remain available for comparison. Its
+  architecture now matches the diagram in the spec's final "Stage 14 —
+  Final Multi-Agent Research Assistant" concept, but per an explicit
+  decision it is *not* being treated as fulfilling that roadmap item —
+  only the narrower "route to all three specialists" item is marked done
+  (see `README.md`'s Status checklist).
 
 ## Next tool
 
-Not yet decided. Stage 15 (`stage15_analysis_agent`) completes the spec's
-three named specialists (Research, Knowledge, Analysis), all still
-standalone with no shared supervisor. Two items remain unbuilt and without
-a folder number: extending Stage 13's supervisor (and Stage 14's critic) to
-route to all three specialists instead of two, and the spec's final
-combined "Stage 14 — Final Multi-Agent Research Assistant"
+Not yet decided. Stage 16 (`stage16_three_specialist_supervisor`) closes
+the "extend the supervisor/critic to three specialists" item. One item
+remains unbuilt and without a folder number: the spec's final combined
+"Stage 14 — Final Multi-Agent Research Assistant"
 (`.claude/spec/spec_document.md`) integrating everything built so far.
