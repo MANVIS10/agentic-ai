@@ -20,14 +20,16 @@
 | 14 | `stage14_critic/` | Same two specialists and supervisor as Stage 13 | A critic node reviews the specialist's answer (structured LLM output: pass/retry) and can send one bounded retry back to the *same* specialist with feedback attached |
 | 15 | `stage15_analysis_agent/` | `calculate` (safe `ast`-based arithmetic evaluator, its only tool) | A third independent specialist (Stage 11/12's pattern again) for calculations, percentages, and comparisons over numbers given in the conversation — no retrieval, no supervisor wiring |
 | 16 | `stage16_three_specialist_supervisor/` | Same three specialists as Stage 15 (Research, Knowledge, Analysis), now all as subgraphs inside the Stage 13/14 supervisor+critic graph | Extends Stage 13's supervisor and Stage 14's critic to route to all three specialists instead of two; the critic needed zero code changes since it never special-cased which specialist produced an answer |
+| 17 | `stage17_final_multi_agent_system/` | Stage 7/8's planner + human-approval loop, wrapped around Stage 16's supervisor+critic graph instead of a plain LLM call or a flat tool agent | The final combined multi-agent research assistant - proves a compiled `StateGraph` invoked inside a node is just a function call, so *any* compiled graph (not just a flat tool agent) can sit in the planner's per-subtask slot |
 
 ## Current tool
 
-None in progress — Stage 16 (`stage16_three_specialist_supervisor`) is
-finished: the Analysis Agent (Stage 15) is now wired into the existing
-supervisor+critic graph alongside Research and Knowledge, so all three
-specialists are reachable through one routed, reviewed graph instead of
-Analysis being reachable only on its own.
+None in progress — Stage 17 (`stage17_final_multi_agent_system`) closes the
+project's roadmap: the outer planner + human-approval loop (Stage 7/8) now
+delegates each subtask to the full supervisor + three-specialist + critic
+pipeline (Stage 16) instead of a plain LLM call or a flat tool agent. This
+is the final combined multi-agent research assistant the whole project was
+building toward.
 
 ## What I learned
 
@@ -160,6 +162,22 @@ Analysis being reachable only on its own.
   proving the Analysis Agent's `calculate` tool was actually invoked
   required asserting against `analysis_graph` (the specialist subgraph)
   directly rather than the outer supervisor graph's result.
+- **Stage 17** — the "planner wraps an arbitrary compiled graph per
+  subtask" composition Stage 8 proved with a flat 4-tool agent generalizes
+  to a much more elaborate graph with no extra work: swapping Stage 16's
+  entire supervisor+critic pipeline into Stage 8's `research_subtask` slot
+  required changing only that one node's body - a different `.invoke(...)`
+  call and a different way of reading the result (`result["messages"][-1]`
+  either way). Two state schemas (the outer plan's plain-value
+  `PlannerState` and the inner pipeline's message-based `CriticState`) can
+  coexist in one file with zero shared keys, because they only ever meet
+  at that one function call and its return value - confirmed there's no
+  LangGraph-level schema-merging concern here, just two independent
+  graphs. Also confirmed retries and routing decisions made *inside* the
+  inner graph (which specialist, how many retries) are invisible to the
+  outer planner unless deliberately printed - `research_subtask` prints
+  them for visibility, but nothing in `PlannerState` records them, since
+  `results` only ever needed to hold answer strings.
 
 ## Important decisions
 
@@ -271,11 +289,25 @@ Analysis being reachable only on its own.
   decision it is *not* being treated as fulfilling that roadmap item —
   only the narrower "route to all three specialists" item is marked done
   (see `README.md`'s Status checklist).
+- **Stage 17 built as `stage17_final_multi_agent_system`, composing Stage
+  7/8 and Stage 16 rather than rewriting either.** Every node, tool, and
+  type it uses already existed in one of those two stages and is copied
+  verbatim; the only new code is `research_subtask`'s body (one
+  `supervisor_critic_graph.invoke(...)` call replacing Stage 8's
+  `research_agent.invoke(...)`). Human approval was kept always-on
+  (matching Stage 7/8 exactly) rather than adding a flag to make it
+  skippable - an explicit decision made before implementation, to avoid an
+  unrequested toggle/abstraction. The inner supervisor+critic graph is
+  compiled without its own checkpointer, since it's a one-shot per-subtask
+  helper (like Stage 8's `research_agent`) rather than its own multi-turn
+  REPL the way Stage 16 runs it - only the outer planner graph keeps
+  `MemorySaver()`, for its one `interrupt()`.
 
 ## Next tool
 
-Not yet decided. Stage 16 (`stage16_three_specialist_supervisor`) closes
-the "extend the supervisor/critic to three specialists" item. One item
-remains unbuilt and without a folder number: the spec's final combined
-"Stage 14 — Final Multi-Agent Research Assistant"
-(`.claude/spec/spec_document.md`) integrating everything built so far.
+None - Stage 17 (`stage17_final_multi_agent_system`) closes the project's
+roadmap. It fulfills the spec's unnumbered final "Stage 14 — Final
+Multi-Agent Research Assistant" (`.claude/spec/spec_document.md`) item,
+and goes a step further than that diagram by also folding in planning and
+human-in-the-loop approval (Stage 7/8) around the supervisor+critic
+pipeline (Stage 16).
