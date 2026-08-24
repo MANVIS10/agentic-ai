@@ -26,6 +26,7 @@ how the code evolved. Concepts build on each other — don't skip ahead.
 | 16 | `stage16_three_specialist_supervisor/` | Stage 15's Analysis Agent joins Stage 13/14's supervisor + critic graph, alongside Research and Knowledge | Widening a structured-output routing field from two choices to N, and confirming the critic needs no changes to support it |
 | 17 | `stage17_final_multi_agent_system/` | Stage 7/8's planner + human-approval loop, with each subtask now researched by Stage 16's full supervisor + three-specialist + critic pipeline instead of a plain LLM call or a flat tool agent | The final combined multi-agent research assistant - composing two independently-built graphs, proving a compiled `StateGraph` invoked inside a node is just a function call regardless of how elaborate that graph is |
 | 18 | `stage18_postgres_persistence/` | Stage 17's exact graph, with its checkpointer swapped from `MemorySaver` to `PostgresSaver` (Postgres via Docker Compose) | Durable checkpointing - a paused or completed conversation now survives a Python process restart, not just a `thread_id` switch within the same process |
+| 19 | `stage19_fastapi_backend/` | Stage 18's exact graph, wrapped in a FastAPI HTTP API (`/health`, `/chat`, `/approve`, `/reject`) instead of a terminal REPL, same Postgres checkpointer | Exposing a compiled LangGraph graph over HTTP - `interrupt()`/`Command(resume=...)` now spans two separate HTTP requests instead of one blocking REPL loop, and `graph.get_state()` becomes the way to validate a pending approval before resuming it |
 
 `stage4_web_fetch`, `stage5_pdf_fetch`, `stage6_planner`, and
 `stage7_human_in_loop` are follow-on tool stages built by request rather
@@ -113,6 +114,15 @@ adjacent concepts are taught together within a single stage folder:
   `PostgresSaver` (a real Postgres database, provisioned via the root
   `docker-compose.yml`), so a paused-for-approval or completed
   conversation now survives killing and restarting the Python process.
+- Stage 19 covers exposing the graph over HTTP - another deliberate
+  extension past the closed roadmap. Stage 18's exact graph, unchanged,
+  wrapped in a FastAPI app with four endpoints instead of a terminal REPL.
+  `interrupt()`/`Command(resume=...)` now spans two separate HTTP requests
+  (`POST /chat` pauses and returns; a later `POST /approve` or
+  `POST /reject` resumes the same `thread_id`) instead of one blocking
+  `input()` loop, and `graph.get_state()` becomes load-bearing rather than
+  a debugging convenience - it's how `/approve`/`/reject` confirm a thread
+  is actually paused before resuming it.
 
 ## Setup
 
@@ -152,3 +162,4 @@ python stage1_chatbot/main.py
 - [x] Stage 16 (`stage16_three_specialist_supervisor`)
 - [x] Final combined multi-agent system (`stage17_final_multi_agent_system`)
 - [x] Stage 18 — durable Postgres checkpointing (`stage18_postgres_persistence`)
+- [x] Stage 19 — FastAPI HTTP backend (`stage19_fastapi_backend`)

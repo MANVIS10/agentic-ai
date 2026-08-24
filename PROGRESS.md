@@ -22,12 +22,13 @@
 | 16 | `stage16_three_specialist_supervisor/` | Same three specialists as Stage 15 (Research, Knowledge, Analysis), now all as subgraphs inside the Stage 13/14 supervisor+critic graph | Extends Stage 13's supervisor and Stage 14's critic to route to all three specialists instead of two; the critic needed zero code changes since it never special-cased which specialist produced an answer |
 | 17 | `stage17_final_multi_agent_system/` | Stage 7/8's planner + human-approval loop, wrapped around Stage 16's supervisor+critic graph instead of a plain LLM call or a flat tool agent | The final combined multi-agent research assistant - proves a compiled `StateGraph` invoked inside a node is just a function call, so *any* compiled graph (not just a flat tool agent) can sit in the planner's per-subtask slot |
 | 18 | `stage18_postgres_persistence/` | — (no tool; reuses Stage 17's graph unchanged) | Stage 17's exact graph with `MemorySaver` swapped for `PostgresSaver` (Postgres via Docker Compose), so a paused-for-approval or completed conversation survives a Python process restart |
+| 19 | `stage19_fastapi_backend/` | — (no new tool; reuses Stage 18's graph unchanged) | Stage 18's exact graph exposed as a FastAPI HTTP API (`/health`, `/chat`, `/approve`, `/reject`) instead of a REPL, same Postgres-backed checkpointer |
 
 ## Current tool
 
-None in progress — Stage 18 (`stage18_postgres_persistence`) is a
-deliberate post-roadmap extension: durable checkpointing on top of the
-Stage 17 capstone, not a missed roadmap item.
+None in progress — Stage 19 (`stage19_fastapi_backend`) is a deliberate
+post-roadmap extension: an HTTP API on top of the Stage 18 capstone, not a
+missed roadmap item.
 
 ## What I learned
 
@@ -189,6 +190,24 @@ Stage 17 capstone, not a missed roadmap item.
   process, with the *previous* process already dead and no `.invoke()` call
   made, proving the pause survives the process that created it, not just
   the thread_id within it.
+- **Stage 19** — `interrupt()`/`Command(resume=...)` were built for exactly
+  this: a REPL's blocking `input()` loop and a stateless HTTP
+  request/response cycle are two different callers of the *same*
+  pause/resume mechanism, and the graph itself needed zero changes to move
+  from one to the other - only the code *around* `graph.invoke(...)`
+  changed (a REPL `while` loop became four FastAPI route handlers). Also
+  confirmed `graph.get_state()` stops being a nice-to-have debugging tool
+  (as it was in Stage 18's `verify_persistence.py`) and becomes
+  load-bearing once a client can call `/approve` on any `thread_id` at any
+  time: `/approve` and `/reject` both call `graph.get_state(config)` first
+  and return `404` for an unknown thread or `409` for one not currently
+  paused at `human_approval`, confirmed directly by calling `/approve`
+  twice on the same completed thread and getting a `409` the second time.
+  Confirmed the same "sync codebase, sync checkpointer" decision from Stage
+  18 extends cleanly to a sync FastAPI layer - plain `def` route handlers
+  (not `async def`) were enough, since FastAPI runs them in a threadpool
+  automatically, same principle as a REPL's one blocking call, just now
+  with several requests able to be in flight in different threads at once.
 
 ## Important decisions
 
@@ -340,14 +359,38 @@ Stage 17 capstone, not a missed roadmap item.
   deterministic - `PostgresSaver` doesn't reset between runs, so old rows
   are deleted explicitly before each test run instead.
 
+- **Stage 19 built as `stage19_fastapi_backend`, duplicating Stage 18's
+  graph code verbatim rather than importing it or editing Stage 18 in
+  place.** Same "previous stages left untouched, no shared `common/`
+  module" convention as every stage before it - `main.py` copies Stage 18's
+  specialists/supervisor/critic/planner/checkpointer setup byte-for-byte
+  (plus its own `knowledge_base/` copy) and adds the FastAPI layer on top.
+- **`thread_id` kept client-supplied and required on `/chat`, `/approve`,
+  and `/reject`, not server-generated.** An explicit decision made before
+  implementation, matching the endpoint spec's own wording and the
+  existing test-file convention (Stage 17/18) of fixed string thread_ids
+  rather than a fresh `uuid4()` minted server-side per call.
+- **Single shared `psycopg` connection left as a known limitation, not
+  fixed with a connection pool.** `pg_conn` is one connection constructed
+  once at module scope (same as Stage 18); concurrent requests in
+  different FastAPI threadpool threads will contend for it rather than
+  running in true parallel. Documented in the stage README as a deliberate,
+  revisitable choice - the same way Stage 18 flagged sync-vs-async - rather
+  than solved here with `psycopg_pool.ConnectionPool` or
+  `AsyncPostgresSaver`.
+- **No new `httpx` line added to `requirements.txt`.** `fastapi.testclient.
+  TestClient` needs `httpx`; confirmed via `pip show httpx` that it's
+  already installed transitively (through `openai`/`langchain-openai`/
+  `langgraph-sdk`) before relying on it, rather than assuming so silently.
+
 ## Next tool
 
-None - Stage 18 (`stage18_postgres_persistence`) is the most recent
-addition. Stage 17 (`stage17_final_multi_agent_system`) closed the
-project's original roadmap: it fulfills the spec's unnumbered final
-"Stage 14 — Final Multi-Agent Research Assistant"
-(`.claude/spec/spec_document.md`) item, and goes a step further than that
-diagram by also folding in planning and human-in-the-loop approval
-(Stage 7/8) around the supervisor+critic pipeline (Stage 16). Stage 18
-extends past that closed roadmap with durable checkpointing, requested as
+None - Stage 19 (`stage19_fastapi_backend`) is the most recent addition.
+Stage 17 (`stage17_final_multi_agent_system`) closed the project's original
+roadmap: it fulfills the spec's unnumbered final "Stage 14 — Final
+Multi-Agent Research Assistant" (`.claude/spec/spec_document.md`) item, and
+goes a step further than that diagram by also folding in planning and
+human-in-the-loop approval (Stage 7/8) around the supervisor+critic
+pipeline (Stage 16). Stages 18 and 19 both extend past that closed roadmap
+- durable checkpointing, then an HTTP API on top of it - each requested as
 a deliberate next step rather than a spec item.
