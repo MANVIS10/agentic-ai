@@ -23,12 +23,13 @@
 | 17 | `stage17_final_multi_agent_system/` | Stage 7/8's planner + human-approval loop, wrapped around Stage 16's supervisor+critic graph instead of a plain LLM call or a flat tool agent | The final combined multi-agent research assistant - proves a compiled `StateGraph` invoked inside a node is just a function call, so *any* compiled graph (not just a flat tool agent) can sit in the planner's per-subtask slot |
 | 18 | `stage18_postgres_persistence/` | — (no tool; reuses Stage 17's graph unchanged) | Stage 17's exact graph with `MemorySaver` swapped for `PostgresSaver` (Postgres via Docker Compose), so a paused-for-approval or completed conversation survives a Python process restart |
 | 19 | `stage19_fastapi_backend/` | — (no new tool; reuses Stage 18's graph unchanged) | Stage 18's exact graph exposed as a FastAPI HTTP API (`/health`, `/chat`, `/approve`, `/reject`) instead of a REPL, same Postgres-backed checkpointer |
+| 20 | `stage20_document_upload/` | — (no new agent tool; a new HTTP route, `POST /documents/upload`) | Stage 19's exact app plus one route that validates, extracts, chunks, and durably stores an uploaded PDF/TXT/DOCX file in two new hand-written Postgres tables (`documents`, `document_chunks`) — storage only, no embeddings/retrieval |
 
 ## Current tool
 
-None in progress — Stage 19 (`stage19_fastapi_backend`) is a deliberate
-post-roadmap extension: an HTTP API on top of the Stage 18 capstone, not a
-missed roadmap item.
+None in progress — Stage 20 (`stage20_document_upload`) is a deliberate
+post-roadmap extension: document ingestion on top of the Stage 19 HTTP API,
+not a missed roadmap item.
 
 ## What I learned
 
@@ -208,6 +209,23 @@ missed roadmap item.
   (not `async def`) were enough, since FastAPI runs them in a threadpool
   automatically, same principle as a REPL's one blocking call, just now
   with several requests able to be in flight in different threads at once.
+- **Stage 20** — a checkpointer isn't the only way to get durable Postgres
+  storage; it's just the one this project had used so far. `documents`/
+  `document_chunks` are the first tables in this repo created with
+  hand-written `CREATE TABLE IF NOT EXISTS` SQL rather than owned by
+  `PostgresSaver.setup()` - same "idempotent, safe every process start"
+  convention, just without a library managing the schema. Confirmed
+  end-to-end against the real Postgres container: a live-fetched PDF, an
+  in-memory-generated DOCX, and a plain TXT file all uploaded, extracted,
+  chunked, and stored correctly, with `chunk_index` values verified
+  contiguous and in order by querying `document_chunks` directly - and
+  every error case (empty file, unsupported extension, corrupt PDF/DOCX,
+  no extractable text, oversized file, missing file) returned the
+  expected status code with no row written. Also confirmed extension-based
+  type detection needs a genuine second, content-based check to be
+  trustworthy: a `.pdf`-named file containing plain text bytes reliably
+  failed inside `PdfReader(...)` rather than being silently accepted as a
+  zero-page "PDF."
 
 ## Important decisions
 
@@ -383,14 +401,50 @@ missed roadmap item.
   already installed transitively (through `openai`/`langchain-openai`/
   `langgraph-sdk`) before relying on it, rather than assuming so silently.
 
+- **Stage 20 built as `stage20_document_upload`, duplicating Stage 19's
+  `main.py` verbatim rather than editing it in place.** Same "previous
+  stages left untouched, no shared `common/` module" convention as every
+  stage before it. A spec was written and approved first
+  (`.claude/spec/stage20_document_upload_spec.md`) before any code was
+  written, per this project's "Claude Code must explain its proposed
+  changes before implementing them" rule.
+- **File type detected by filename extension, not `UploadFile.content_type`.**
+  Multipart clients set `content_type` inconsistently (many send
+  `application/octet-stream` for anything) - extraction itself
+  (`PdfReader`/`DocxDocument`/`.decode("utf-8")`) is the real, content-based
+  second check, matching the "tool fails gracefully, don't trust the
+  caller's claims" principle already established in Stage 4/5.
+- **One Postgres transaction per upload** (`pg_conn.transaction()`,
+  usable even on the existing autocommit connection) wrapping the
+  `documents` insert and every `document_chunks` insert together, so a
+  failure partway through never leaves an orphaned `documents` row with a
+  wrong `chunk_count`.
+- **No dedicated persistence-restart script**, unlike Stage 18/19.
+  `documents`/`document_chunks` have no pause/resume semantics to
+  demonstrate - the test file's direct `pg_conn` queries against those
+  tables already prove durability, without needing a second demo script.
+- **Test fixtures added no new binary assets.** The PDF check reuses
+  `stage5_pdf_fetch/test_fetch_pdf.py`'s exact fixture URL (fetched live at
+  test time); the DOCX check generates a file in-memory with
+  `python-docx`'s own `Document()`/`.add_paragraph()`/`.save(io.BytesIO())`.
+- **`CHUNK_SIZE`/`CHUNK_OVERLAP` exposed as named module-level constants
+  in `main.py`** (`400`/`50`, matching `load_knowledge_base()`'s values)
+  rather than passed inline to `RecursiveCharacterTextSplitter`, so the
+  test file could import and assert against them directly (confirming a
+  long fixture document actually exceeds one chunk) instead of duplicating
+  the number.
+
 ## Next tool
 
-None - Stage 19 (`stage19_fastapi_backend`) is the most recent addition.
+None - Stage 20 (`stage20_document_upload`) is the most recent addition.
 Stage 17 (`stage17_final_multi_agent_system`) closed the project's original
 roadmap: it fulfills the spec's unnumbered final "Stage 14 — Final
 Multi-Agent Research Assistant" (`.claude/spec/spec_document.md`) item, and
 goes a step further than that diagram by also folding in planning and
 human-in-the-loop approval (Stage 7/8) around the supervisor+critic
-pipeline (Stage 16). Stages 18 and 19 both extend past that closed roadmap
-- durable checkpointing, then an HTTP API on top of it - each requested as
-a deliberate next step rather than a spec item.
+pipeline (Stage 16). Stages 18, 19, and 20 all extend past that closed
+roadmap - durable checkpointing, then an HTTP API on top of it, then
+document upload/ingestion on top of that - each requested as a deliberate
+next step rather than a spec item. A Step 21 (embeddings + retrieval over
+the `document_chunks` table Stage 20 created, feeding into the Knowledge
+Agent) is previewed in Stage 20's spec but not yet built.

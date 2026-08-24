@@ -11,3 +11,5 @@ langgraph-checkpoint-postgres
 psycopg[binary]
 fastapi
 uvicorn
+python-docx
+python-multipart
