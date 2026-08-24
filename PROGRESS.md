@@ -24,12 +24,13 @@
 | 18 | `stage18_postgres_persistence/` | — (no tool; reuses Stage 17's graph unchanged) | Stage 17's exact graph with `MemorySaver` swapped for `PostgresSaver` (Postgres via Docker Compose), so a paused-for-approval or completed conversation survives a Python process restart |
 | 19 | `stage19_fastapi_backend/` | — (no new tool; reuses Stage 18's graph unchanged) | Stage 18's exact graph exposed as a FastAPI HTTP API (`/health`, `/chat`, `/approve`, `/reject`) instead of a REPL, same Postgres-backed checkpointer |
 | 20 | `stage20_document_upload/` | — (no new agent tool; a new HTTP route, `POST /documents/upload`) | Stage 19's exact app plus one route that validates, extracts, chunks, and durably stores an uploaded PDF/TXT/DOCX file in two new hand-written Postgres tables (`documents`, `document_chunks`) — storage only, no embeddings/retrieval |
+| 21 | `stage21_semantic_search/` | — (no new agent tool; two new HTTP routes, `POST /documents/backfill-embeddings` and `POST /documents/search`) | Stage 20's exact app plus an `embedding vector(1536)` column on `document_chunks` (`pgvector`), embedding generation on upload, a backfill route for pre-existing chunks, and cosine-similarity search with configurable `top_k`/threshold/document scoping — search only, no RAG/agent wiring |
 
 ## Current tool
 
-None in progress — Stage 20 (`stage20_document_upload`) is a deliberate
-post-roadmap extension: document ingestion on top of the Stage 19 HTTP API,
-not a missed roadmap item.
+None in progress — Stage 21 (`stage21_semantic_search`) is a deliberate
+post-roadmap extension: semantic search on top of the Stage 20 document
+store, not a missed roadmap item.
 
 ## What I learned
 
@@ -226,6 +227,37 @@ not a missed roadmap item.
   trustworthy: a `.pdf`-named file containing plain text bytes reliably
   failed inside `PdfReader(...)` rather than being silently accepted as a
   zero-page "PDF."
+- **Stage 21** — a checkpointer-owned table isn't the only pattern this
+  project's Postgres tables can follow; `document_chunks` (Stage 20, hand-
+  written) can itself evolve after the fact via `ALTER TABLE ... ADD
+  COLUMN IF NOT EXISTS` - the first schema *evolution* in this repo, as
+  opposed to every earlier DDL only ever creating a brand-new table.
+  Confirmed a real, non-obvious correctness risk before writing any
+  storage code: the `pgvector` Python package's psycopg adapter only
+  registers dumpers for its own `Vector` type and `numpy.ndarray`, never a
+  plain `list` - since `OpenAIEmbeddings.embed_documents()`/`.embed_query()`
+  return plain `list[float]`, every embedding has to be wrapped in
+  `Vector(...)` before it touches a query parameter, or psycopg silently
+  adapts it as a generic array instead of a `vector` and the query fails.
+  Confirmed end-to-end against the real database and OpenAI embeddings API
+  (no mocking): uploads through this stage's own `/documents/upload` get
+  every chunk embedded automatically (1536 dimensions, verified via
+  `vector_dims(embedding)` directly in psql); a chunk inserted by hand with
+  no embedding (simulating a Stage-20-era row) started `NULL` and was
+  correctly picked up and populated by `POST /documents/backfill-embeddings`;
+  and `POST /documents/search` scored a solar-worded query's similarity to
+  a solar-content document (0.633) clearly higher than to a hydro-content
+  document (0.361), respected `top_k`, excluded every result under an
+  unreachable `similarity_threshold`, and scoped correctly to one
+  `document_id`. Also confirmed the "shared database across every stage"
+  property of this project (Stage 18 onward) cuts both ways here: swapping
+  `docker-compose.yml`'s image preserved all 4 pre-existing `documents`
+  rows and 64 `document_chunks` rows exactly, but those same leftover rows
+  from Stage 20's own test suite (including chunks literally about solar
+  and hydro power) meant an *unscoped* "is the single top search result
+  document X" assertion was flaky in a shared dev database - fixed by
+  comparing each candidate document's own similarity score via
+  `document_id`-scoped searches instead of asserting a single global rank.
 
 ## Important decisions
 
@@ -434,17 +466,60 @@ not a missed roadmap item.
   long fixture document actually exceeds one chunk) instead of duplicating
   the number.
 
+- **Stage 21 built as `stage21_semantic_search`, duplicating Stage 20's
+  `main.py` verbatim rather than editing it in place.** Same convention as
+  every stage before it. A spec was written and approved first
+  (`.claude/spec/stage21_semantic_search_spec.md`), then a plan, before any
+  code was written.
+- **`docker-compose.yml`'s Postgres image swapped from `postgres:16` to
+  `pgvector/pgvector:pg16`.** The plain image has no `pgvector` shared
+  library, so `CREATE EXTENSION vector` fails against it. Flagged and
+  confirmed explicitly before changing it, since it's shared infrastructure
+  every stage from 18 onward connects to - not a stage-scoped file. Same
+  Postgres 16 base and named volume, so no data migration was needed.
+- **`ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS embedding
+  vector(1536)`, not a new `chunk_embeddings` table.** One row already
+  exists per chunk; a nullable column keeps the one-chunk/one-embedding
+  relationship trivial (no join needed for search) instead of introducing
+  a second table with its own FK back to `document_chunks`.
+- **Backfill embeds one chunk at a time, not one batched `embed_documents`
+  call over every `NULL` row.** A single batched call fails all-or-
+  nothing; per-chunk calls (each in its own try/except, each `UPDATE`
+  committing independently on the autocommit connection) mean one bad
+  chunk never blocks the rest, and a retry is naturally scoped to whatever
+  is still `NULL` with no extra state to track.
+- **`document_id` kept as `str`, not `uuid.UUID`, in the search request
+  model.** A `UUID`-typed field would let Pydantic auto-422 a malformed
+  value before the route body ever runs, but the spec only defines a `404`
+  for "does not exist" - parsing by hand with a `try/except ValueError`
+  mapped to that same `404` makes "malformed and unknown both → 404"
+  actually true.
+- **Cosine distance (`pgvector`'s `<=>` operator), not L2 or inner
+  product.** Matches the metric embedding-based similarity search
+  conventionally uses, and what `InMemoryVectorStore.similarity_search`
+  already does under the hood for the bundled knowledge base - consistent
+  behavior between the two search paths in this project.
+- **Relevance test compares each candidate document's own similarity score
+  via `document_id`-scoped searches, not an unscoped "is the top overall
+  result X" assertion.** Discovered directly: an unscoped version of this
+  check failed against the real shared database, because Stage 20's own
+  test suite leaves permanent `document_chunks` rows behind (it only
+  clears its own fixed filenames at the start of each run) - some of them,
+  by coincidence, topically overlap with this stage's solar/hydro test
+  fixtures. Comparing two known documents' scores directly for the same
+  query is robust to whatever else exists in a database every stage shares.
+
 ## Next tool
 
-None - Stage 20 (`stage20_document_upload`) is the most recent addition.
+None - Stage 21 (`stage21_semantic_search`) is the most recent addition.
 Stage 17 (`stage17_final_multi_agent_system`) closed the project's original
 roadmap: it fulfills the spec's unnumbered final "Stage 14 — Final
 Multi-Agent Research Assistant" (`.claude/spec/spec_document.md`) item, and
 goes a step further than that diagram by also folding in planning and
 human-in-the-loop approval (Stage 7/8) around the supervisor+critic
-pipeline (Stage 16). Stages 18, 19, and 20 all extend past that closed
-roadmap - durable checkpointing, then an HTTP API on top of it, then
-document upload/ingestion on top of that - each requested as a deliberate
-next step rather than a spec item. A Step 21 (embeddings + retrieval over
-the `document_chunks` table Stage 20 created, feeding into the Knowledge
-Agent) is previewed in Stage 20's spec but not yet built.
+pipeline (Stage 16). Stages 18-21 all extend past that closed roadmap -
+durable checkpointing, then an HTTP API, then document upload/ingestion,
+then embeddings + semantic search on top of that - each requested as a
+deliberate next step rather than a spec item. A Stage 22 (wrapping
+`POST /documents/search` as a tool the Knowledge Agent, or a new
+specialist, can call) is previewed in Stage 21's spec but not yet built.

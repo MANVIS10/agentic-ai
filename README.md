@@ -28,6 +28,7 @@ how the code evolved. Concepts build on each other — don't skip ahead.
 | 18 | `stage18_postgres_persistence/` | Stage 17's exact graph, with its checkpointer swapped from `MemorySaver` to `PostgresSaver` (Postgres via Docker Compose) | Durable checkpointing - a paused or completed conversation now survives a Python process restart, not just a `thread_id` switch within the same process |
 | 19 | `stage19_fastapi_backend/` | Stage 18's exact graph, wrapped in a FastAPI HTTP API (`/health`, `/chat`, `/approve`, `/reject`) instead of a terminal REPL, same Postgres checkpointer | Exposing a compiled LangGraph graph over HTTP - `interrupt()`/`Command(resume=...)` now spans two separate HTTP requests instead of one blocking REPL loop, and `graph.get_state()` becomes the way to validate a pending approval before resuming it |
 | 20 | `stage20_document_upload/` | Stage 19's exact app plus one new endpoint, `POST /documents/upload`, that validates, extracts, chunks, and durably stores an uploaded PDF/TXT/DOCX file in two new Postgres tables (`documents`, `document_chunks`) | Accepting and storing arbitrary user-supplied file uploads - the first hand-written (non-checkpointer-owned) Postgres tables in this repo; storage only, no embeddings/retrieval yet |
+| 21 | `stage21_semantic_search/` | Stage 20's exact app plus embeddings for every uploaded chunk (`pgvector`), a backfill endpoint for pre-existing chunks, and `POST /documents/search` for cosine-similarity search with configurable `top_k`/threshold/document scoping | Durable vector storage via Postgres + `pgvector`, instead of an in-memory store rebuilt every process start; the first schema *evolution* (`ALTER TABLE ... ADD COLUMN`) in this repo, not just first-time table creation; search only, no RAG/agent wiring yet |
 
 `stage4_web_fetch`, `stage5_pdf_fetch`, `stage6_planner`, and
 `stage7_human_in_loop` are follow-on tool stages built by request rather
@@ -133,6 +134,19 @@ adjacent concepts are taught together within a single stage folder:
   hand-written SQL rather than owned by `PostgresSaver`. Deliberately
   storage-only - no embeddings, vector search, or Knowledge Agent wiring
   yet (see `.claude/spec/stage20_document_upload_spec.md`).
+- Stage 21 covers embeddings and semantic vector search - another
+  deliberate extension past the closed roadmap. Stage 20's exact app,
+  unchanged, plus an `embedding vector(1536)` column added to
+  `document_chunks` (the first schema *evolution* in this repo, via
+  `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, not just first-time table
+  creation), a `POST /documents/backfill-embeddings` endpoint for chunks
+  uploaded before this stage existed, and `POST /documents/search` for
+  cosine-similarity search (`pgvector`'s `<=>` operator) with configurable
+  `top_k`, an optional similarity threshold, and optional per-document
+  scoping. Requires `docker-compose.yml`'s Postgres image swapped to
+  `pgvector/pgvector:pg16` to support the extension. Deliberately search-
+  only - no RAG answer generation or Knowledge Agent wiring yet (see
+  `.claude/spec/stage21_semantic_search_spec.md`).
 
 ## Setup
 
@@ -174,3 +188,4 @@ python stage1_chatbot/main.py
 - [x] Stage 18 — durable Postgres checkpointing (`stage18_postgres_persistence`)
 - [x] Stage 19 — FastAPI HTTP backend (`stage19_fastapi_backend`)
 - [x] Stage 20 — document upload & ingestion (`stage20_document_upload`)
+- [x] Stage 21 — embeddings & semantic vector search (`stage21_semantic_search`)
