@@ -20,6 +20,9 @@ that checks four things:
    every subtask (each one delegating to the supervisor+critic pipeline)
    and produces a final_answer; rejecting it (Command(resume="n")) produces
    no final_answer at all.
+5. Running two different questions back-to-back on the SAME thread_id
+   doesn't leak state between them - approving one question and then
+   rejecting the next must not surface the first question's final_answer.
 
 Run with:
     python stage17_final_multi_agent_system/test_final_multi_agent_system.py
@@ -132,8 +135,9 @@ def run_planner_approval_checks():
     assert "__interrupt__" in result, "Expected the graph to pause for human approval"
 
     result = graph.invoke(Command(resume="y"), config=approve_config)
-    assert "final_answer" in result, "Expected an approved plan to produce a final_answer"
-    assert result["final_answer"].strip(), "Expected a non-empty final_answer"
+    assert result.get("final_answer", "").strip(), (
+        "Expected an approved plan to produce a non-empty final_answer"
+    )
     assert len(result["results"]) == len(result["subtasks"]), (
         "Expected one research result per subtask"
     )
@@ -146,9 +150,42 @@ def run_planner_approval_checks():
     assert "__interrupt__" in result, "Expected the graph to pause for human approval"
 
     result = graph.invoke(Command(resume="n"), config=reject_config)
-    assert "final_answer" not in result, "Expected a rejected plan to produce no final_answer"
+    assert not result.get("final_answer"), "Expected a rejected plan to produce no final_answer"
 
     print("[planner rejection check] rejected run produced no final answer, as expected.\n")
+
+
+def run_same_thread_multi_question_check():
+    """Regression test for the stale-final_answer bug: two different
+    questions run back-to-back on the SAME thread_id (unlike every other
+    check above, which gives each scenario its own thread). Approve the
+    first question, then reject the second, and confirm the second result
+    doesn't still carry the first question's final_answer - which is
+    exactly what happened when plan() didn't reset final_answer/approved
+    and main() reused one thread_id for a whole REPL session.
+    """
+    config = {"configurable": {"thread_id": "test-same-thread"}}
+
+    first_question = "How does solar power generate electricity?"
+    result = graph.invoke({"question": first_question}, config=config)
+    assert "__interrupt__" in result, "Expected the graph to pause for human approval"
+    result = graph.invoke(Command(resume="y"), config=config)
+    first_answer = result.get("final_answer", "").strip()
+    assert first_answer, "Expected the first (approved) question to produce a final_answer"
+
+    second_question = "What is the average of 12, 18, and 30?"
+    result = graph.invoke({"question": second_question}, config=config)
+    assert "__interrupt__" in result, "Expected the graph to pause for human approval"
+    result = graph.invoke(Command(resume="n"), config=config)
+    assert not result.get("final_answer"), (
+        "Expected the second (rejected) question to produce no final_answer, but got "
+        f"a leftover answer from the first question: {result.get('final_answer')!r}"
+    )
+
+    print(
+        "[same-thread multi-question check] rejecting a second question on the same "
+        "thread did not leak the first question's final_answer, as expected.\n"
+    )
 
 
 def run():
@@ -156,6 +193,7 @@ def run():
     run_analysis_tool_check()
     run_retry_cap_check()
     run_planner_approval_checks()
+    run_same_thread_multi_question_check()
     print(
         "All checks passed: the inner supervisor+critic pipeline still routes and "
         "reviews correctly when embedded as a helper, and the outer planner's "

@@ -32,6 +32,7 @@ run_until_settled) - see each section's comment for its origin.
 
 import ast
 import operator
+import uuid
 from pathlib import Path
 from typing import Literal
 
@@ -466,7 +467,18 @@ def plan(state: PlannerState):
     for i, subtask in enumerate(subtasks, start=1):
         print(f"  {i}. {subtask}")
 
-    return {"subtasks": subtasks, "current_index": 0, "results": []}
+    # Reset every field a later node might set, not just the ones this node
+    # itself uses. plan() is the one node guaranteed to run first on every
+    # turn (START -> plan), so it's the only place that can undo a stale
+    # final_answer/approved left behind by an earlier question on the same
+    # thread.
+    return {
+        "subtasks": subtasks,
+        "current_index": 0,
+        "results": [],
+        "final_answer": "",
+        "approved": False,
+    }
 
 
 def human_approval(state: PlannerState):
@@ -475,7 +487,13 @@ def human_approval(state: PlannerState):
 
 
 def route_after_approval(state: PlannerState) -> str:
-    return "research_subtask" if state["approved"] else END
+    if not state["approved"]:
+        return END
+    # Don't assume plan() produced at least one subtask - reuse the same
+    # "anything left to research?" check used between subtask loops, so an
+    # empty plan goes straight to synthesize instead of indexing into an
+    # empty subtasks list in research_subtask.
+    return has_more_subtasks(state)
 
 
 def research_subtask(state: PlannerState):
@@ -551,13 +569,18 @@ def run_until_settled(initial_input, config):
 
 
 def main():
-    config = {"configurable": {"thread_id": "1"}}
     print("Stage 17: final multi-agent research assistant. Type 'exit' to quit.\n")
 
     while True:
         question = input("Research question: ").strip()
         if question.lower() in {"exit", "quit"}:
             break
+
+        # A fresh thread_id per question (not one shared thread_id for the
+        # whole session) keeps each question's checkpointed state isolated.
+        # plan() also resets final_answer/approved on every run as a second
+        # line of defense, in case a caller ever does reuse one thread.
+        config = {"configurable": {"thread_id": str(uuid.uuid4())}}
 
         try:
             result = run_until_settled({"question": question}, config)
@@ -569,7 +592,7 @@ def main():
             print(f"[Error] This question could not be answered: {exc}\n")
             continue
 
-        if "final_answer" in result:
+        if result.get("final_answer"):
             print(f"\nFinal answer: {result['final_answer']}\n")
         else:
             print("\nPlan was not approved - no research was done.\n")
