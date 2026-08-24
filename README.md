@@ -25,6 +25,7 @@ how the code evolved. Concepts build on each other — don't skip ahead.
 | 15 | `stage15_analysis_agent/` | A third independent specialist (Stage 11/12's pattern again) with one tool, `calculate`, for arithmetic over numbers given in the conversation | A "compute" specialist rather than a "retrieve" one - same graph shape, different kind of tool |
 | 16 | `stage16_three_specialist_supervisor/` | Stage 15's Analysis Agent joins Stage 13/14's supervisor + critic graph, alongside Research and Knowledge | Widening a structured-output routing field from two choices to N, and confirming the critic needs no changes to support it |
 | 17 | `stage17_final_multi_agent_system/` | Stage 7/8's planner + human-approval loop, with each subtask now researched by Stage 16's full supervisor + three-specialist + critic pipeline instead of a plain LLM call or a flat tool agent | The final combined multi-agent research assistant - composing two independently-built graphs, proving a compiled `StateGraph` invoked inside a node is just a function call regardless of how elaborate that graph is |
+| 18 | `stage18_postgres_persistence/` | Stage 17's exact graph, with its checkpointer swapped from `MemorySaver` to `PostgresSaver` (Postgres via Docker Compose) | Durable checkpointing - a paused or completed conversation now survives a Python process restart, not just a `thread_id` switch within the same process |
 
 `stage4_web_fetch`, `stage5_pdf_fetch`, `stage6_planner`, and
 `stage7_human_in_loop` are follow-on tool stages built by request rather
@@ -106,6 +107,12 @@ adjacent concepts are taught together within a single stage folder:
   agent (Stage 8). Nothing new was invented: it's pure composition of two
   independently-built graphs, meeting only at one function call inside
   `research_subtask`.
+- Stage 18 covers durable checkpointing - a deliberate extension added
+  after the roadmap above closed at Stage 17, not a missed roadmap item.
+  Stage 17's exact graph, unchanged, with `MemorySaver` swapped for
+  `PostgresSaver` (a real Postgres database, provisioned via the root
+  `docker-compose.yml`), so a paused-for-approval or completed
+  conversation now survives killing and restarting the Python process.
 
 ## Setup
 
@@ -144,3 +151,4 @@ python stage1_chatbot/main.py
 - [x] Stage 15 (`stage15_analysis_agent`)
 - [x] Stage 16 (`stage16_three_specialist_supervisor`)
 - [x] Final combined multi-agent system (`stage17_final_multi_agent_system`)
+- [x] Stage 18 — durable Postgres checkpointing (`stage18_postgres_persistence`)

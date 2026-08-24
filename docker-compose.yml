@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: langgraph_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    ports:
+      # Host port 5433 (not the default 5432): this machine already has a
+      # separate local Postgres service bound to 5432, so 5432:5432 would
+      # either fail to bind or silently connect to the wrong server.
+      - "5433:5432"
+    volumes:
+      - langgraph_postgres_data:/var/lib/postgresql/data
+
+volumes:
+  langgraph_postgres_data:

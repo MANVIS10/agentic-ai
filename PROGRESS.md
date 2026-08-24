@@ -21,15 +21,13 @@
 | 15 | `stage15_analysis_agent/` | `calculate` (safe `ast`-based arithmetic evaluator, its only tool) | A third independent specialist (Stage 11/12's pattern again) for calculations, percentages, and comparisons over numbers given in the conversation — no retrieval, no supervisor wiring |
 | 16 | `stage16_three_specialist_supervisor/` | Same three specialists as Stage 15 (Research, Knowledge, Analysis), now all as subgraphs inside the Stage 13/14 supervisor+critic graph | Extends Stage 13's supervisor and Stage 14's critic to route to all three specialists instead of two; the critic needed zero code changes since it never special-cased which specialist produced an answer |
 | 17 | `stage17_final_multi_agent_system/` | Stage 7/8's planner + human-approval loop, wrapped around Stage 16's supervisor+critic graph instead of a plain LLM call or a flat tool agent | The final combined multi-agent research assistant - proves a compiled `StateGraph` invoked inside a node is just a function call, so *any* compiled graph (not just a flat tool agent) can sit in the planner's per-subtask slot |
+| 18 | `stage18_postgres_persistence/` | — (no tool; reuses Stage 17's graph unchanged) | Stage 17's exact graph with `MemorySaver` swapped for `PostgresSaver` (Postgres via Docker Compose), so a paused-for-approval or completed conversation survives a Python process restart |
 
 ## Current tool
 
-None in progress — Stage 17 (`stage17_final_multi_agent_system`) closes the
-project's roadmap: the outer planner + human-approval loop (Stage 7/8) now
-delegates each subtask to the full supervisor + three-specialist + critic
-pipeline (Stage 16) instead of a plain LLM call or a flat tool agent. This
-is the final combined multi-agent research assistant the whole project was
-building toward.
+None in progress — Stage 18 (`stage18_postgres_persistence`) is a
+deliberate post-roadmap extension: durable checkpointing on top of the
+Stage 17 capstone, not a missed roadmap item.
 
 ## What I learned
 
@@ -178,6 +176,19 @@ building toward.
   outer planner unless deliberately printed - `research_subtask` prints
   them for visibility, but nothing in `PlannerState` records them, since
   `results` only ever needed to hold answer strings.
+- **Stage 18** — a checkpointer is a pluggable backend behind one interface
+  (`compile(checkpointer=...)`); the rest of the graph has no idea which
+  store is behind it. Confirmed directly: swapping `MemorySaver` for
+  `PostgresSaver` changed exactly one block of `main.py` (the connection,
+  `.setup()`, and `.compile()` call) and nothing else - every node, edge,
+  prompt, and tool stayed byte-identical to Stage 17 and the same
+  approve/reject/retry behavior held. Also confirmed `interrupt()`'s
+  "parked mid-run" state (Stage 7's lesson) really is just rows in whatever
+  store the checkpointer writes to - `graph.get_state(config)` recovered a
+  plan and a still-pending `human_approval` interrupt in a fresh Python
+  process, with the *previous* process already dead and no `.invoke()` call
+  made, proving the pause survives the process that created it, not just
+  the thread_id within it.
 
 ## Important decisions
 
@@ -302,12 +313,41 @@ building toward.
   helper (like Stage 8's `research_agent`) rather than its own multi-turn
   REPL the way Stage 16 runs it - only the outer planner graph keeps
   `MemorySaver()`, for its one `interrupt()`.
+- **Stage 18 built as `stage18_postgres_persistence`, a new folder rather
+  than editing Stage 17 in place.** Stage 17 was already complete, tested,
+  reviewed, and pushed - per the "no shared `common/` module, previous
+  stages left untouched" convention, durable checkpointing became its own
+  numbered stage that duplicates Stage 17's `main.py` (and its
+  `knowledge_base/`) rather than modifying the capstone. This is genuinely
+  new roadmap territory, added after Stage 17 explicitly closed the
+  original roadmap (see "Next tool" below, pre-Stage-18) - framed here as a
+  deliberate extension, not a missed item.
+- **Postgres provisioned via Docker Compose (`docker-compose.yml` at the
+  repo root, not inside the stage folder).** Treated as shared
+  infrastructure (like `requirements.txt`/`.env` already are) rather than
+  stage-scoped application code, since there's only ever one Postgres
+  service in this project. Host port mapped to `5433`, not the default
+  `5432`, because this dev machine already runs an unrelated local
+  Postgres service on `5432` - confirmed directly when `5432:5432` bound
+  successfully but then failed password authentication against that other
+  server instead of the new container.
+- **Sync `PostgresSaver`, not `AsyncPostgresSaver`.** The codebase has zero
+  `async def` anywhere (every stage uses `.invoke()` and a plain `input()`
+  REPL) - matching that over introducing an event loop for one component.
+- **Test file adds a `checkpointer.delete_thread(...)` cleanup step Stage
+  17's test didn't need**, since Stage 17's hardcoded test thread_ids
+  relied on `MemorySaver` resetting to empty every process run to stay
+  deterministic - `PostgresSaver` doesn't reset between runs, so old rows
+  are deleted explicitly before each test run instead.
 
 ## Next tool
 
-None - Stage 17 (`stage17_final_multi_agent_system`) closes the project's
-roadmap. It fulfills the spec's unnumbered final "Stage 14 — Final
-Multi-Agent Research Assistant" (`.claude/spec/spec_document.md`) item,
-and goes a step further than that diagram by also folding in planning and
-human-in-the-loop approval (Stage 7/8) around the supervisor+critic
-pipeline (Stage 16).
+None - Stage 18 (`stage18_postgres_persistence`) is the most recent
+addition. Stage 17 (`stage17_final_multi_agent_system`) closed the
+project's original roadmap: it fulfills the spec's unnumbered final
+"Stage 14 — Final Multi-Agent Research Assistant"
+(`.claude/spec/spec_document.md`) item, and goes a step further than that
+diagram by also folding in planning and human-in-the-loop approval
+(Stage 7/8) around the supervisor+critic pipeline (Stage 16). Stage 18
+extends past that closed roadmap with durable checkpointing, requested as
+a deliberate next step rather than a spec item.
