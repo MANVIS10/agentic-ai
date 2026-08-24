@@ -25,12 +25,13 @@
 | 19 | `stage19_fastapi_backend/` | — (no new tool; reuses Stage 18's graph unchanged) | Stage 18's exact graph exposed as a FastAPI HTTP API (`/health`, `/chat`, `/approve`, `/reject`) instead of a REPL, same Postgres-backed checkpointer |
 | 20 | `stage20_document_upload/` | — (no new agent tool; a new HTTP route, `POST /documents/upload`) | Stage 19's exact app plus one route that validates, extracts, chunks, and durably stores an uploaded PDF/TXT/DOCX file in two new hand-written Postgres tables (`documents`, `document_chunks`) — storage only, no embeddings/retrieval |
 | 21 | `stage21_semantic_search/` | — (no new agent tool; two new HTTP routes, `POST /documents/backfill-embeddings` and `POST /documents/search`) | Stage 20's exact app plus an `embedding vector(1536)` column on `document_chunks` (`pgvector`), embedding generation on upload, a backfill route for pre-existing chunks, and cosine-similarity search with configurable `top_k`/threshold/document scoping — search only, no RAG/agent wiring |
+| 22 | `stage22_knowledge_agent_rag/` | `search_uploaded_documents` (Knowledge Agent's tool, replacing `search_knowledge_base` in this stage's own copy) | Stage 21's exact app with the Knowledge Agent's tool swapped: it now answers from user-uploaded documents (`document_chunks` via `pgvector`, in-process) instead of the bundled `knowledge_base/*.md` — a replacement, not an addition, so the bundled knowledge base is unreachable from this stage for normal queries |
 
 ## Current tool
 
-None in progress — Stage 21 (`stage21_semantic_search`) is a deliberate
-post-roadmap extension: semantic search on top of the Stage 20 document
-store, not a missed roadmap item.
+None in progress — Stage 22 (`stage22_knowledge_agent_rag`) is the most
+recent addition, wiring Stage 21's semantic search into the Knowledge
+Agent as a deliberate post-roadmap extension.
 
 ## What I learned
 
@@ -258,6 +259,30 @@ store, not a missed roadmap item.
   document X" assertion was flaky in a shared dev database - fixed by
   comparing each candidate document's own similarity score via
   `document_id`-scoped searches instead of asserting a single global rank.
+- **Stage 22** — a specialist's tool can be swapped out entirely without
+  touching the supervisor, critic, or planner layers above it, extending
+  Stage 16's "critic needs no changes when a specialist is added" lesson
+  one layer deeper: it also holds when a specialist's internals are
+  *replaced*. `knowledge_node` only ever calls `knowledge_graph.invoke(...)`
+  and never references a tool by name, so replacing
+  `search_knowledge_base` with `search_uploaded_documents` inside the
+  Knowledge Agent's own subgraph required zero edits to `supervisor_node`,
+  `critic_node`, or the outer planner. Also confirmed directly: without a
+  similarity threshold, `ORDER BY embedding <=> query LIMIT k` always
+  returns the closest `k` chunks whenever *any* embedded chunk exists in
+  `document_chunks` — there is no SQL-detectable "matched zero relevant
+  chunks" state distinct from "matched something weakly related," so the
+  tool's only reachable empty case is "no uploaded chunks have an
+  embedding at all." Confirmed end-to-end: uploading a distinctive
+  document and asking about it produced an answer that used
+  `search_uploaded_documents` (verified directly on `knowledge_graph`'s
+  messages, since the outer supervisor graph doesn't surface a
+  specialist's intermediate tool-call messages — Stage 16's limitation
+  again); asking about a fact unique to bundled `knowledge_base/wind.md`
+  (untouched, not duplicated into this stage's folder) never leaked that
+  fact into the answer, proving the bundled knowledge base is genuinely
+  unreachable, not just unbound; and supervisor routing to the Knowledge
+  Agent was unaffected by the swap.
 
 ## Important decisions
 
@@ -508,18 +533,44 @@ store, not a missed roadmap item.
   by coincidence, topically overlap with this stage's solar/hydro test
   fixtures. Comparing two known documents' scores directly for the same
   query is robust to whatever else exists in a database every stage shares.
+- **Stage 22 built as `stage22_knowledge_agent_rag`, duplicating Stage 21's
+  `main.py` rather than editing it in place.** Same convention as every
+  stage before it. A spec was written and approved first
+  (`.claude/spec/stage22_knowledge_agent_rag_spec.md`), then a plan
+  (`.claude/plans/stage22_knowledge_agent_rag_plan.md`), before any code
+  was written.
+- **Replacement, not addition, for the Knowledge Agent's tool.** The
+  originally-previewed design (Stage 21 §14, this project's own default
+  recommendation) was to bind a *second* tool alongside
+  `search_knowledge_base`, searching bundled and uploaded docs together.
+  Overridden per an explicit user instruction: bundled
+  `knowledge_base/*.md` content must not be used for normal queries at
+  all. `search_knowledge_base` is dropped from this stage's own copy of
+  `main.py` entirely (not left bound alongside the new tool), and
+  `knowledge_base/` isn't even duplicated into this stage's folder, since
+  nothing in it would read those files. The bundled knowledge base and its
+  original tool remain fully intact in Stage 3, 8, 10, 16-21 - "historical
+  compatibility" means those folders are untouched, not that this stage
+  carries the capability forward.
+- **No similarity threshold in `search_uploaded_documents`.** Matches
+  `search_knowledge_base`'s own threshold-free `k=3` design. The
+  alternative (add a threshold, so "documents exist but none relevant"
+  becomes a distinct, detectable state) was considered and rejected to
+  keep behavior simple and consistent with the one retrieval tool this
+  project already had - the specialist LLM is trusted to judge relevance
+  from returned content itself, same as it always has.
 
 ## Next tool
 
-None - Stage 21 (`stage21_semantic_search`) is the most recent addition.
-Stage 17 (`stage17_final_multi_agent_system`) closed the project's original
-roadmap: it fulfills the spec's unnumbered final "Stage 14 — Final
-Multi-Agent Research Assistant" (`.claude/spec/spec_document.md`) item, and
-goes a step further than that diagram by also folding in planning and
-human-in-the-loop approval (Stage 7/8) around the supervisor+critic
-pipeline (Stage 16). Stages 18-21 all extend past that closed roadmap -
-durable checkpointing, then an HTTP API, then document upload/ingestion,
-then embeddings + semantic search on top of that - each requested as a
-deliberate next step rather than a spec item. A Stage 22 (wrapping
-`POST /documents/search` as a tool the Knowledge Agent, or a new
-specialist, can call) is previewed in Stage 21's spec but not yet built.
+None - Stage 22 (`stage22_knowledge_agent_rag`) is the most recent
+addition. Stage 17 (`stage17_final_multi_agent_system`) closed the
+project's original roadmap: it fulfills the spec's unnumbered final
+"Stage 14 — Final Multi-Agent Research Assistant"
+(`.claude/spec/spec_document.md`) item, and goes a step further than that
+diagram by also folding in planning and human-in-the-loop approval
+(Stage 7/8) around the supervisor+critic pipeline (Stage 16). Stages 18-22
+all extend past that closed roadmap - durable checkpointing, then an HTTP
+API, then document upload/ingestion, then embeddings + semantic search,
+then wiring that search into the Knowledge Agent - each requested as a
+deliberate next step rather than a spec item. No further stage is
+currently planned.

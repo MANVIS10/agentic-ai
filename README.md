@@ -29,6 +29,7 @@ how the code evolved. Concepts build on each other — don't skip ahead.
 | 19 | `stage19_fastapi_backend/` | Stage 18's exact graph, wrapped in a FastAPI HTTP API (`/health`, `/chat`, `/approve`, `/reject`) instead of a terminal REPL, same Postgres checkpointer | Exposing a compiled LangGraph graph over HTTP - `interrupt()`/`Command(resume=...)` now spans two separate HTTP requests instead of one blocking REPL loop, and `graph.get_state()` becomes the way to validate a pending approval before resuming it |
 | 20 | `stage20_document_upload/` | Stage 19's exact app plus one new endpoint, `POST /documents/upload`, that validates, extracts, chunks, and durably stores an uploaded PDF/TXT/DOCX file in two new Postgres tables (`documents`, `document_chunks`) | Accepting and storing arbitrary user-supplied file uploads - the first hand-written (non-checkpointer-owned) Postgres tables in this repo; storage only, no embeddings/retrieval yet |
 | 21 | `stage21_semantic_search/` | Stage 20's exact app plus embeddings for every uploaded chunk (`pgvector`), a backfill endpoint for pre-existing chunks, and `POST /documents/search` for cosine-similarity search with configurable `top_k`/threshold/document scoping | Durable vector storage via Postgres + `pgvector`, instead of an in-memory store rebuilt every process start; the first schema *evolution* (`ALTER TABLE ... ADD COLUMN`) in this repo, not just first-time table creation; search only, no RAG/agent wiring yet |
+| 22 | `stage22_knowledge_agent_rag/` | Stage 21's exact app with the Knowledge Agent's tool replaced: `search_uploaded_documents` (pgvector search over `document_chunks`, in-process) instead of `search_knowledge_base` (the bundled `knowledge_base/*.md`) | A specialist's tool can be swapped out entirely without touching the supervisor, critic, or planner above it - `knowledge_node` only ever calls `knowledge_graph.invoke(...)` and never references a tool by name. Deliberately a *replacement*, not an addition: the bundled knowledge base is unreachable from this stage for normal queries, kept intact only in Stage 3-21 for historical compatibility |
 
 `stage4_web_fetch`, `stage5_pdf_fetch`, `stage6_planner`, and
 `stage7_human_in_loop` are follow-on tool stages built by request rather
@@ -147,6 +148,21 @@ adjacent concepts are taught together within a single stage folder:
   `pgvector/pgvector:pg16` to support the extension. Deliberately search-
   only - no RAG answer generation or Knowledge Agent wiring yet (see
   `.claude/spec/stage21_semantic_search_spec.md`).
+- Stage 22 covers wiring that search into the Knowledge Agent - another
+  deliberate extension past the closed roadmap. Stage 21's exact app,
+  unchanged, except the Knowledge Agent's tool is *replaced*:
+  `search_uploaded_documents` (a new `@tool` running Stage 21's cosine-
+  similarity query in-process against `document_chunks`) instead of
+  `search_knowledge_base` (the bundled `knowledge_base/*.md` via
+  `InMemoryVectorStore`). This is a deliberate design choice, not the
+  default additive one: for normal queries, the bundled knowledge base
+  must not be reachable at all, so it's dropped from this stage's own copy
+  entirely rather than bound alongside the new tool. It remains fully
+  intact and working in Stage 3, 8, 10, 16-21 - "historical compatibility"
+  means those folders are untouched, not that this stage carries the
+  capability forward. The supervisor, critic, planner, and every other
+  route are byte-identical to Stage 21 (see
+  `.claude/spec/stage22_knowledge_agent_rag_spec.md`).
 
 ## Setup
 
@@ -189,3 +205,4 @@ python stage1_chatbot/main.py
 - [x] Stage 19 — FastAPI HTTP backend (`stage19_fastapi_backend`)
 - [x] Stage 20 — document upload & ingestion (`stage20_document_upload`)
 - [x] Stage 21 — embeddings & semantic vector search (`stage21_semantic_search`)
+- [x] Stage 22 — Knowledge Agent RAG over uploaded documents (`stage22_knowledge_agent_rag`)
