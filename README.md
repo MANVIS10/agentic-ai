@@ -30,6 +30,7 @@ how the code evolved. Concepts build on each other — don't skip ahead.
 | 20 | `stage20_document_upload/` | Stage 19's exact app plus one new endpoint, `POST /documents/upload`, that validates, extracts, chunks, and durably stores an uploaded PDF/TXT/DOCX file in two new Postgres tables (`documents`, `document_chunks`) | Accepting and storing arbitrary user-supplied file uploads - the first hand-written (non-checkpointer-owned) Postgres tables in this repo; storage only, no embeddings/retrieval yet |
 | 21 | `stage21_semantic_search/` | Stage 20's exact app plus embeddings for every uploaded chunk (`pgvector`), a backfill endpoint for pre-existing chunks, and `POST /documents/search` for cosine-similarity search with configurable `top_k`/threshold/document scoping | Durable vector storage via Postgres + `pgvector`, instead of an in-memory store rebuilt every process start; the first schema *evolution* (`ALTER TABLE ... ADD COLUMN`) in this repo, not just first-time table creation; search only, no RAG/agent wiring yet |
 | 22 | `stage22_knowledge_agent_rag/` | Stage 21's exact app with the Knowledge Agent's tool replaced: `search_uploaded_documents` (pgvector search over `document_chunks`, in-process) instead of `search_knowledge_base` (the bundled `knowledge_base/*.md`) | A specialist's tool can be swapped out entirely without touching the supervisor, critic, or planner above it - `knowledge_node` only ever calls `knowledge_graph.invoke(...)` and never references a tool by name. Deliberately a *replacement*, not an addition: the bundled knowledge base is unreachable from this stage for normal queries, kept intact only in Stage 3-21 for historical compatibility |
+| 23 | `stage23_user_document_isolation/` | Stage 22's exact app with every uploaded document now owned by a caller-supplied `user_id`, filtered on both `POST /documents/search` and the Knowledge Agent's `search_uploaded_documents` tool, so one user's uploads can never be returned to another user | A tool bound to an LLM can read trusted, server-side context the model itself can never see or set - `search_uploaded_documents`'s new `user_id` argument is populated via `langgraph.prebuilt.InjectedState` straight from graph state, excluded from the schema the model sees, closing off the "tool argument the LLM could be tricked into changing" attack this stage exists to prevent |
 
 `stage4_web_fetch`, `stage5_pdf_fetch`, `stage6_planner`, and
 `stage7_human_in_loop` are follow-on tool stages built by request rather
@@ -163,6 +164,21 @@ adjacent concepts are taught together within a single stage folder:
   capability forward. The supervisor, critic, planner, and every other
   route are byte-identical to Stage 21 (see
   `.claude/spec/stage22_knowledge_agent_rag_spec.md`).
+- Stage 23 covers isolating uploaded documents per user - another
+  deliberate extension past the closed roadmap. Stage 22's exact app,
+  unchanged, except `documents` gains a `user_id TEXT NOT NULL DEFAULT
+  'default-user'` column (migrated via `ALTER TABLE ... ADD COLUMN IF NOT
+  EXISTS`, backfilling every pre-existing row to the sentinel owner in the
+  same statement), and both retrieval paths - `POST /documents/search` and
+  the Knowledge Agent's `search_uploaded_documents` tool - filter every
+  query by it. `user_id` is a required, caller-supplied field on `POST
+  /chat`, `POST /documents/upload`, and `POST /documents/search`, trusted
+  at face value like `thread_id` always has been - not authentication.
+  The tool's `user_id` argument reaches it via
+  `langgraph.prebuilt.InjectedState`, populated from graph state and
+  invisible to the model, so an LLM can never be tricked into supplying
+  someone else's `user_id` (see
+  `.claude/spec/stage23_user_document_isolation_spec.md`).
 
 ## Setup
 
@@ -206,3 +222,4 @@ python stage1_chatbot/main.py
 - [x] Stage 20 — document upload & ingestion (`stage20_document_upload`)
 - [x] Stage 21 — embeddings & semantic vector search (`stage21_semantic_search`)
 - [x] Stage 22 — Knowledge Agent RAG over uploaded documents (`stage22_knowledge_agent_rag`)
+- [x] Stage 23 — per-user document isolation (`stage23_user_document_isolation`)

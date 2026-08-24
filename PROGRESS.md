@@ -26,12 +26,13 @@
 | 20 | `stage20_document_upload/` | — (no new agent tool; a new HTTP route, `POST /documents/upload`) | Stage 19's exact app plus one route that validates, extracts, chunks, and durably stores an uploaded PDF/TXT/DOCX file in two new hand-written Postgres tables (`documents`, `document_chunks`) — storage only, no embeddings/retrieval |
 | 21 | `stage21_semantic_search/` | — (no new agent tool; two new HTTP routes, `POST /documents/backfill-embeddings` and `POST /documents/search`) | Stage 20's exact app plus an `embedding vector(1536)` column on `document_chunks` (`pgvector`), embedding generation on upload, a backfill route for pre-existing chunks, and cosine-similarity search with configurable `top_k`/threshold/document scoping — search only, no RAG/agent wiring |
 | 22 | `stage22_knowledge_agent_rag/` | `search_uploaded_documents` (Knowledge Agent's tool, replacing `search_knowledge_base` in this stage's own copy) | Stage 21's exact app with the Knowledge Agent's tool swapped: it now answers from user-uploaded documents (`document_chunks` via `pgvector`, in-process) instead of the bundled `knowledge_base/*.md` — a replacement, not an addition, so the bundled knowledge base is unreachable from this stage for normal queries |
+| 23 | `stage23_user_document_isolation/` | `search_uploaded_documents` (Knowledge Agent's tool, now scoped per-user via `InjectedState`) | Stage 22's exact app with every uploaded document owned by a caller-supplied `user_id` (`documents.user_id`, migrated onto the existing shared table) and both retrieval paths — `POST /documents/search` and the Knowledge Agent's tool — filtered by it, so one user's uploads can never be returned to another user |
 
 ## Current tool
 
-None in progress — Stage 22 (`stage22_knowledge_agent_rag`) is the most
-recent addition, wiring Stage 21's semantic search into the Knowledge
-Agent as a deliberate post-roadmap extension.
+None in progress — Stage 23 (`stage23_user_document_isolation`) is the
+most recent addition, closing the cross-user document retrieval gap Stage
+20/22 explicitly deferred.
 
 ## What I learned
 
@@ -283,6 +284,47 @@ Agent as a deliberate post-roadmap extension.
   fact into the answer, proving the bundled knowledge base is genuinely
   unreachable, not just unbound; and supervisor routing to the Knowledge
   Agent was unaffected by the swap.
+- **Stage 23** — a tool bound to an LLM can read trusted, server-side
+  context the model itself can never see or set. `search_uploaded_documents`
+  gained a `user_id` argument sourced via `langgraph.prebuilt.InjectedState`
+  from the graph's own state, not as a normal string argument the model
+  fills in — `bind_tools` excludes an `InjectedState`-annotated parameter
+  from the schema shown to the LLM entirely, so a compromised or confused
+  model literally cannot supply someone else's `user_id`, closing off the
+  most obvious alternative design (a plain `user_id: str` tool argument)
+  before it became a real vulnerability. Threading that `user_id` down to
+  the tool required exactly one new field on three existing state schemas
+  (`PlannerState`, `CriticState`, and a new `KnowledgeState` subclassing
+  `MessagesState` for the Knowledge Agent subgraph specifically) — the same
+  "state flows through function calls between independently-compiled
+  graphs" pattern Stage 17/22 already established, just carrying one more
+  piece of context. Confirmed end-to-end against the real database and
+  OpenAI APIs (no mocking): two distinct users (`alice`/`bob`) each
+  uploaded a document with distinctive, made-up content, and every
+  retrieval path was checked from both directions — `POST
+  /documents/search` never returned the other user's document even when
+  the query matched their content closely; the full Knowledge Agent
+  subgraph, asked as Alice about a fact that only exists in Bob's
+  document, reported honestly rather than leaking Bob's actual
+  confidential figure; `search_uploaded_documents.invoke(...)` called
+  directly with different injected `user_id` values confirmed the same
+  isolation independent of any one LLM's tool-call behavior; a
+  `document_id` owned by another user produced the *identical* `404`
+  status and detail string as a nonexistent one (no existence-oracle
+  leak); and a `user_id` shaped like a SQL injection attempt
+  (`"alice' OR '1'='1"`) matched zero documents, confirming the filter is
+  a genuine parameterized query value, not a string concatenated into
+  SQL. Also confirmed the migration path against this project's real
+  shared database: importing this stage's `main.py` ran `ALTER TABLE
+  documents ADD COLUMN IF NOT EXISTS user_id TEXT NOT NULL DEFAULT
+  'default-user'` against a table that already held 9 rows from Stage
+  20-22 testing, and every one of them was backfilled to the
+  `'default-user'` sentinel in that same statement rather than left `NULL`
+  or orphaned — verified directly with a `GROUP BY user_id` query. Ran
+  Stage 22's own test file afterward, unmodified, against that now-migrated
+  shared database as a regression check, and it still passed — the new
+  column and index are additive and don't affect any query that doesn't
+  reference them.
 
 ## Important decisions
 
@@ -562,15 +604,15 @@ Agent as a deliberate post-roadmap extension.
 
 ## Next tool
 
-None - Stage 22 (`stage22_knowledge_agent_rag`) is the most recent
+None - Stage 23 (`stage23_user_document_isolation`) is the most recent
 addition. Stage 17 (`stage17_final_multi_agent_system`) closed the
 project's original roadmap: it fulfills the spec's unnumbered final
 "Stage 14 — Final Multi-Agent Research Assistant"
 (`.claude/spec/spec_document.md`) item, and goes a step further than that
 diagram by also folding in planning and human-in-the-loop approval
-(Stage 7/8) around the supervisor+critic pipeline (Stage 16). Stages 18-22
+(Stage 7/8) around the supervisor+critic pipeline (Stage 16). Stages 18-23
 all extend past that closed roadmap - durable checkpointing, then an HTTP
 API, then document upload/ingestion, then embeddings + semantic search,
-then wiring that search into the Knowledge Agent - each requested as a
-deliberate next step rather than a spec item. No further stage is
-currently planned.
+then wiring that search into the Knowledge Agent, then isolating those
+documents per user - each requested as a deliberate next step rather than
+a spec item. No further stage is currently planned.
