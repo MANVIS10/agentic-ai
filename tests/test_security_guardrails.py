@@ -345,6 +345,21 @@ def test_search_input_validation(client):
     assert top_k_too_high.json()["detail"] == f"top_k must be at most {MAX_TOP_K}"
 
 
+def test_top_k_ceiling_stays_bounded(client):
+    """The assertions above are RELATIVE - they derive their input from
+    MAX_TOP_K, so they scale with it and stay green even if the ceiling is
+    loosened to an absurd value. A mutation test caught that gap: raising
+    MAX_TOP_K to 999999 left test_search_input_validation passing, so an
+    unbounded top_k (a resource-exhaustion vector - it is passed straight
+    into SQL LIMIT) would ship unnoticed.
+
+    This check is deliberately ABSOLUTE. If someone raises the ceiling past
+    a defensible number, this fails and forces the decision to be explicit.
+    """
+    assert MAX_TOP_K <= 100, f"MAX_TOP_K={MAX_TOP_K} is too permissive for a SQL LIMIT"
+    assert search(client, "valid query", "tester", top_k=101).status_code == 400
+
+
 def test_oversized_json_body(client):
     """A JSON body over MAX_JSON_BODY_BYTES is rejected by the middleware
     before Pydantic ever parses it - and confirm the same size limit does
