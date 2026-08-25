@@ -17,6 +17,7 @@ class Settings(BaseSettings):
         default="postgresql://postgres:postgres@localhost:5433/postgres?sslmode=disable",
         alias="DATABASE_URL",
     )
+    db_pool_max_size: int = 10
     # Comma-separated extra origins for deployment, on top of the Vite dev server.
     allowed_origins_env: str = Field(default="", alias="ALLOWED_ORIGINS")
     openai_chat_model: str = "gpt-4o-mini"

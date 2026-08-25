@@ -1,14 +1,40 @@
+import asyncio
 import os
+import sys
 
 import pytest
+
+# Windows-only, must run before pytest-asyncio creates any test's event
+# loop (module load time, i.e. now, is early enough - a per-test import
+# inside an async test function body would not be). psycopg's async mode
+# cannot run on Windows' default ProactorEventLoop ("Psycopg cannot use the
+# 'ProactorEventLoop' to run in async mode"); WindowsSelectorEventLoopPolicy
+# is the documented workaround. Harmless on non-Windows platforms, where
+# this attribute doesn't exist and the block is skipped entirely.
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
 @pytest.fixture(scope="session")
 def pg_available():
-    from app.db import get_connection
+    """Skip a test when Postgres is unreachable.
+
+    Phase 2 (async conversion): app.db no longer exposes a synchronous
+    get_connection() to probe - its connection pool is async-only. This
+    check is deliberately independent of app.db's own API: it just opens a
+    plain, throwaway sync psycopg connection against the same
+    settings.database_url to answer "is Postgres reachable", the same
+    question the old check answered, without needing an event loop here
+    (this fixture itself is sync so it can be shared by sync and async
+    tests alike).
+    """
+    import psycopg
+
+    from app.config import settings
 
     try:
-        get_connection().execute("SELECT 1").fetchone()
+        with psycopg.connect(settings.database_url, connect_timeout=5) as conn:
+            conn.execute("SELECT 1").fetchone()
     except Exception as exc:
         pytest.skip(f"Postgres not available: {exc}")
 

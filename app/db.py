@@ -1,23 +1,31 @@
-"""Database connection, schema setup, and checkpointer, moved from
-stage25_react_ui/backend/main.py (lines 742-799).
+"""Database connection pool, schema setup, and checkpointer.
 
-The original opened the connection and ran every DDL statement at module
-scope, so `import main` was never safe without a live Postgres connection.
-This module makes that lazy: `get_connection()` opens the connection on
-first call (not at import), and `init_schema()` - not import - runs the
-checkpointer setup, the documents/document_chunks DDL, and the pgvector
-setup. Both remain idempotent, matching the original's "safe every process
-start" convention.
+Phase 2 (async conversion): replaces Phase 1's single shared psycopg
+connection with an `AsyncConnectionPool`. The old `get_connection()`
+returned ONE connection shared by every request; since Phase 1's endpoints
+were sync `def`, FastAPI ran them in a 40-thread pool, so `with
+conn.transaction():` in one thread could capture another thread's
+concurrent `execute()` - transactions are per-CONNECTION, not per-thread.
+A pool gives each caller its own connection for the life of its work, so
+`async with conn.transaction():` is genuinely isolated.
+
+`get_pool()` opens the pool lazily (not at import), matching Phase 1's
+"import must never need a live database" convention. `connection()` is the
+async context manager every caller uses to borrow one pooled connection.
+`init_schema()` and `get_checkpointer()` are now async/loop-bound - see
+their docstrings.
 """
 
-import psycopg
-from langgraph.checkpoint.postgres import PostgresSaver
-from pgvector.psycopg import register_vector
+from contextlib import asynccontextmanager
+
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+from pgvector.psycopg import register_vector_async
+from psycopg_pool import AsyncConnectionPool
 
 from app.config import settings
 
-_conn: psycopg.Connection | None = None
-_checkpointer: PostgresSaver | None = None
+_pool: AsyncConnectionPool | None = None
+_checkpointer: AsyncPostgresSaver | None = None
 
 # ---------------------------------------------------------------------------
 # Document upload tables (Stage 20-23, unchanged schema). Created
@@ -48,58 +56,115 @@ CREATE TABLE IF NOT EXISTS document_chunks (
 """
 
 
-def get_connection() -> psycopg.Connection:
-    """One shared autocommit connection, exactly as the original had at
-    main.py:749. Phase 2 replaces this with a ConnectionPool - the shared
-    connection is a known concurrency hazard (a `with conn.transaction()`
-    in one thread captures another thread's execute), preserved here
-    deliberately because Phase 1 forbids behavior change."""
-    global _conn
-    if _conn is None:
-        _conn = psycopg.connect(
-            settings.database_url, autocommit=True, prepare_threshold=0
+async def _configure(conn) -> None:
+    """Registers pgvector's `vector` type on every pooled connection as it's
+    created. The old single-connection code called `register_vector(conn)`
+    once, on its one connection (init_schema(), main.py:799-ish); with a
+    pool handing out many different connections over the process lifetime,
+    that registration has to happen per-connection, via the pool's
+    `configure` hook, or a connection opened after startup would not know
+    the `vector` type and document search would fail unpredictably."""
+    await register_vector_async(conn)
+
+
+def get_pool() -> AsyncConnectionPool:
+    """Replaces Phase 1's single shared connection. Each caller gets its own
+    connection for the duration of its work, so `async with
+    conn.transaction()` is genuinely isolated - the bug this phase fixes.
+    Opened lazily (`open=False` + explicit `.open()` in `connection()`), not
+    at import or at construction, so importing this module never needs a
+    live database.
+    """
+    global _pool
+    if _pool is None:
+        _pool = AsyncConnectionPool(
+            settings.database_url,
+            min_size=1,
+            max_size=settings.db_pool_max_size,
+            open=False,
+            kwargs={"autocommit": True, "prepare_threshold": 0},
+            configure=_configure,
         )
-    return _conn
+    return _pool
 
 
-def get_checkpointer() -> PostgresSaver:
-    """The same PostgresSaver as the original's module-level `checkpointer`
-    (main.py:750), lazily constructed over get_connection()'s connection."""
+async def _ensure_pool_open() -> AsyncConnectionPool:
+    """Opens the pool on first use if it isn't already open. Shared by
+    `connection()` and `init_schema()`: the checkpointer's own `setup()`
+    borrows a connection directly from the pool object (bypassing
+    `connection()` entirely, since AsyncPostgresSaver is handed the raw pool
+    in `get_checkpointer()`), so `init_schema()` must ensure the pool is
+    open itself before calling `checkpointer.setup()` - otherwise the very
+    first caller of `init_schema()` (before anything has gone through
+    `connection()`) hits `PoolClosed: not open yet`.
+    """
+    pool = get_pool()
+    if pool.closed:
+        await pool.open()
+    return pool
+
+
+@asynccontextmanager
+async def connection():
+    """Async context manager yielding a pooled `AsyncConnection`. Opens the
+    pool on first use if it isn't already open."""
+    pool = await _ensure_pool_open()
+    async with pool.connection() as conn:
+        yield conn
+
+
+async def close_pool() -> None:
+    """Closes the pool, for the lifespan shutdown handler."""
+    global _pool
+    if _pool is not None:
+        await _pool.close()
+        _pool = None
+
+
+def get_checkpointer() -> AsyncPostgresSaver:
+    """The async counterpart of the original's module-level PostgresSaver,
+    now backed by the connection pool rather than a single connection.
+    AsyncPostgresSaver captures the running event loop at construction time
+    (`asyncio.get_running_loop()`), so this must be called from within
+    async code with a loop already running - the lifespan handler, not
+    module import.
+    """
     global _checkpointer
     if _checkpointer is None:
-        _checkpointer = PostgresSaver(get_connection())
+        _checkpointer = AsyncPostgresSaver(get_pool())
     return _checkpointer
 
 
-def init_schema() -> None:
+async def init_schema() -> None:
     """Runs checkpointer.setup(), the documents/document_chunks DDL, and
     the pgvector setup - everything the original ran unconditionally at
-    module scope (main.py:751, 783-799). Idempotent: every statement here
-    is CREATE ... IF NOT EXISTS / ADD COLUMN IF NOT EXISTS, so calling this
-    more than once is safe, matching the original's own behavior (it ran
-    on every process start too).
+    module scope. Idempotent: every statement here is CREATE ... IF NOT
+    EXISTS / ADD COLUMN IF NOT EXISTS, so calling this more than once is
+    safe, matching the original's own behavior (it ran on every process
+    start too). Now async since it awaits both the checkpointer's async
+    setup() and every query over the pool.
     """
-    conn = get_connection()
+    await _ensure_pool_open()  # checkpointer.setup() borrows from the pool directly - see _ensure_pool_open's docstring
+    await get_checkpointer().setup()  # idempotent: creates the checkpoint tables on first run only
 
-    # Same checkpointer setup as Stage 23: a PostgresSaver backed by a real
-    # database, so this graph's checkpoints (the plan, subtasks,
-    # results-so-far, and any paused-at-human_approval interrupt) outlive
-    # the Python process.
-    get_checkpointer().setup()  # idempotent: creates the checkpoint tables on first run only
+    async with connection() as conn:
+        await conn.execute(DOCUMENTS_TABLE_SQL)
+        await conn.execute(DOCUMENT_CHUNKS_TABLE_SQL)  # after documents - it has a FK reference to it
 
-    conn.execute(DOCUMENTS_TABLE_SQL)
-    conn.execute(DOCUMENT_CHUNKS_TABLE_SQL)  # after documents - it has a FK reference to it
+        await conn.execute(
+            "ALTER TABLE documents ADD COLUMN IF NOT EXISTS user_id TEXT NOT NULL DEFAULT 'default-user'"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_documents_user_id ON documents (user_id)"
+        )
 
-    conn.execute(
-        "ALTER TABLE documents ADD COLUMN IF NOT EXISTS user_id TEXT NOT NULL DEFAULT 'default-user'"
-    )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_documents_user_id ON documents (user_id)")
-
-    # ---------------------------------------------------------------------
-    # pgvector setup (Stage 21-23, unchanged). Idempotent, same "safe to
-    # run every process start" convention as checkpointer.setup() and the
-    # DDL above.
-    # ---------------------------------------------------------------------
-    conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
-    conn.execute("ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS embedding vector(1536)")
-    register_vector(conn)
+        # -------------------------------------------------------------------
+        # pgvector setup (Stage 21-23, unchanged). Idempotent, same "safe to
+        # run every process start" convention as checkpointer.setup() and
+        # the DDL above. register_vector itself now happens per-connection
+        # via the pool's configure hook (_configure above), not here.
+        # -------------------------------------------------------------------
+        await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        await conn.execute(
+            "ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS embedding vector(1536)"
+        )
