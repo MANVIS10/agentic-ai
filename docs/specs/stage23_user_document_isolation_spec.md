@@ -11,7 +11,7 @@ Stage 23  Per-user document isolation    → Next (this spec)
 
 Like Stage 18-22, Stage 23 is a deliberate extension past the original
 roadmap in `spec_document.md`, not a numbered item from it. It builds on
-Stage 22's Knowledge Agent (`stage22_knowledge_agent_rag/`) the same way
+Stage 22's Knowledge Agent (`stages/stage22_knowledge_agent_rag/`) the same way
 every prior stage built on the one before it: a new stage folder that
 duplicates what it needs rather than editing the previous stage in place,
 per `CLAUDE.md`'s "previous stages left untouched, no shared `common/`

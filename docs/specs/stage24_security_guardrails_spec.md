@@ -11,7 +11,7 @@ Stage 24  Security & guardrails          → Next (this spec)
 
 Like Stage 18-23, Stage 24 is a deliberate extension past the original
 roadmap in `spec_document.md`, not a numbered item from it. It builds on
-Stage 23's per-user isolation (`stage23_user_document_isolation/`) the
+Stage 23's per-user isolation (`stages/stage23_user_document_isolation/`) the
 same way every prior stage built on the one before it: a new stage folder
 that duplicates what it needs rather than editing the previous stage in
 place, per `CLAUDE.md`'s "previous stages left untouched, no shared
@@ -42,7 +42,7 @@ Concretely, four classes of gap exist in Stage 23's code today and are
 addressed here:
 
 1. **Resource-exhaustion gaps in the upload pipeline** —
-   `upload_document` (`stage23_user_document_isolation/main.py:1108`)
+   `upload_document` (`stages/stage23_user_document_isolation/main.py:1108`)
    reads the *entire* file into memory (`file.file.read()`, line 1129)
    before checking its size, and `extract_text()` (line 734) has no
    bound on PDF page count, DOCX zip-bomb expansion, or wall-clock parse

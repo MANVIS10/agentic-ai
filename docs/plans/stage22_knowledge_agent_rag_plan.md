@@ -2,8 +2,8 @@
 
 ## Context
 
-Implements `.claude/spec/stage22_knowledge_agent_rag_spec.md` (approved).
-Stage 21 (`stage21_semantic_search/`) built cosine-similarity search over
+Implements `docs/specs/stage22_knowledge_agent_rag_spec.md` (approved).
+Stage 21 (`stages/stage21_semantic_search/`) built cosine-similarity search over
 `document_chunks` (`POST /documents/search`) but wired it to nothing — no
 LLM ever reads a result. Stage 22 gives the Knowledge Agent a tool that
 runs that same search in-process and **replaces** its existing
@@ -14,8 +14,8 @@ queries, and the bundled knowledge base must not be touched anywhere it
 already exists (Stage 3, 8, 10, 16-21 keep `search_knowledge_base`
 byte-identical).
 
-New folder `stage22_knowledge_agent_rag/`, duplicating
-`stage21_semantic_search/main.py` per this project's "previous stages left
+New folder `stages/stage22_knowledge_agent_rag/`, duplicating
+`stages/stage21_semantic_search/main.py` per this project's "previous stages left
 untouched, no shared `common/` module" convention. No new pip dependencies
 (`pgvector`, `psycopg[binary]`, `langchain-openai` are already in
 `requirements.txt`). No `docker-compose.yml`/`.env` changes — same shared
@@ -38,7 +38,7 @@ subgraph builder, `knowledge_graph`) is replaced with:
 # files. search_knowledge_base and knowledge_base/*.md are NOT carried
 # forward into this stage - they remain untouched in Stage 3-21 as a
 # historical reference for the earlier, simpler retrieval pattern. See
-# .claude/spec/stage22_knowledge_agent_rag_spec.md §3/§6.
+# docs/specs/stage22_knowledge_agent_rag_spec.md §3/§6.
 # ---------------------------------------------------------------------------
 
 KNOWLEDGE_SYSTEM_PROMPT = (
@@ -156,11 +156,11 @@ constructed, just for the new tool instead of the bundled KB).
 ### `knowledge_base/` directory not duplicated
 
 Unlike every other Stage 21 file/folder, `knowledge_base/*.md` is **not**
-copied into `stage22_knowledge_agent_rag/` — nothing in this stage's code
-reads it. (It remains present and untouched in `stage3_rag/` through
-`stage21_semantic_search/`.)
+copied into `stages/stage22_knowledge_agent_rag/` — nothing in this stage's code
+reads it. (It remains present and untouched in `stages/stage3_rag/` through
+`stages/stage21_semantic_search/`.)
 
-### Everything else — copied verbatim from `stage21_semantic_search/main.py`
+### Everything else — copied verbatim from `stages/stage21_semantic_search/main.py`
 
 No other code changes. Copied unchanged:
 - Imports not called out above (`psycopg`, `uvicorn`, `docx`, `dotenv`,
@@ -208,14 +208,14 @@ Stage 20's — a one-line text edit, not a structural change.
 
 ## Files to change
 
-- **`stage22_knowledge_agent_rag/main.py`** (new file) — full duplicate of
-  `stage21_semantic_search/main.py` with the Knowledge Agent section
+- **`stages/stage22_knowledge_agent_rag/main.py`** (new file) — full duplicate of
+  `stages/stage21_semantic_search/main.py` with the Knowledge Agent section
   replaced per the Design above, three dead imports dropped, and the
   `FastAPI(description=...)` string updated. No `knowledge_base/`
   subdirectory created.
-- **`stage22_knowledge_agent_rag/test_knowledge_agent_rag.py`** (new file)
+- **`stages/stage22_knowledge_agent_rag/test_knowledge_agent_rag.py`** (new file)
   — standalone script (asserts + prints, no pytest, matching
-  `stage21_semantic_search/test_semantic_search.py`'s conventions),
+  `stages/stage21_semantic_search/test_semantic_search.py`'s conventions),
   covering spec §8:
   - Zero uploaded documents → Knowledge Agent's answer reflects "no
     documents uploaded" rather than fabricating one.
@@ -237,7 +237,7 @@ Stage 20's — a one-line text edit, not a structural change.
   - Cleanup: delete this test's own uploaded documents/chunks at the end
     (or start), matching Stage 20/21's fixed-filename cleanup convention,
     since the shared dev database persists rows across stages.
-- **`stage22_knowledge_agent_rag/README.md`** (new file) — what was added
+- **`stages/stage22_knowledge_agent_rag/README.md`** (new file) — what was added
   (Knowledge Agent now searches uploaded documents via pgvector instead of
   the bundled knowledge base), the concept demonstrated (swapping a bound
   tool + its owning prompt without touching routing/critic/planner layers
@@ -278,7 +278,7 @@ copy of `search_knowledge_base`, stays byte-identical.
 1. `docker-compose up -d` (existing `pgvector/pgvector:pg16` container,
    already required since Stage 21 — confirm it's already running before
    assuming a fresh start).
-2. Run `python stage22_knowledge_agent_rag/main.py` (or
+2. Run `python stages/stage22_knowledge_agent_rag/main.py` (or
    `uvicorn stage22_knowledge_agent_rag.main:app`) and confirm the app
    boots with no import errors (catches the three dropped-import edits
    being wrong immediately).
@@ -294,12 +294,12 @@ copy of `search_knowledge_base`, stays byte-identical.
    upload → confirm the answer does **not** contain bundled-KB-only facts,
    proving `search_knowledge_base`/`knowledge_base/*.md` are genuinely
    unreachable from this stage, not just unbound.
-7. Run `python stage22_knowledge_agent_rag/test_knowledge_agent_rag.py` →
+7. Run `python stages/stage22_knowledge_agent_rag/test_knowledge_agent_rag.py` →
    all assertions pass.
-8. Confirm `stage21_semantic_search/main.py` (and every earlier stage) is
+8. Confirm `stages/stage21_semantic_search/main.py` (and every earlier stage) is
    byte-identical to before (`git status`/`git diff` shows no changes
-   outside the new `stage22_knowledge_agent_rag/` folder and the four
+   outside the new `stages/stage22_knowledge_agent_rag/` folder and the four
    documentation files listed above).
-9. Re-run `stage21_semantic_search/test_semantic_search.py` unmodified →
+9. Re-run `stages/stage21_semantic_search/test_semantic_search.py` unmodified →
    still passes, confirming Stage 22's new folder didn't regress Stage 21
    (they share the same live database).

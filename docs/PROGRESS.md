@@ -4,31 +4,31 @@
 
 | Stage | Folder | Tool | What it does |
 |---|---|---|---|
-| 1 | `stage1_chatbot/` | — (no tool yet) | Terminal chatbot that remembers the conversation per thread |
-| 2 | `stage2_tool_agent/` | `DuckDuckGoSearchRun` | Agent searches the web when it doesn't know the answer |
-| 3 | `stage3_rag/` | `search_knowledge_base` | Agent retrieves grounded answers from local markdown docs |
-| 4 | `stage4_web_fetch/` | `fetch_webpage` | Agent fetches a specific URL and reads its text content |
-| 5 | `stage5_pdf_fetch/` | `fetch_pdf` | Agent downloads a PDF and reads its extracted text content |
-| 6 | `stage6_planner/` | — (no tool; plain LLM calls) | Breaks a research question into subtasks, answers each, combines into a final answer |
-| 7 | `stage7_human_in_loop/` | — (no tool; reuses Stage 6's planner) | Shows the research plan and pauses for human y/n approval before any subtask research runs |
-| 8 | `stage8_research_workflow/` | `search_web`, `search_knowledge_base`, `fetch_webpage`, `fetch_pdf` (all four, bound together) | Reuses Stage 7's planner unchanged; each subtask is researched by a small tool-calling agent that picks whichever of the four existing tools fits |
-| 9 | `stage9_simple_memory/` | — (no tool; `save_memory`/`load_memory` outside the graph) | Stage 1's chatbot plus a JSON-file long-term memory: `remember: <text>` saves a fact, `recall` retrieves it, surviving across threads and process restarts |
-| 10 | `stage10_multi_tool_agent/` | `search_web`, `search_knowledge_base`, `fetch_webpage`, `fetch_pdf` (all four, bound together) | Stage 2's flat `agent -> tools -> agent` chat loop, with all four tools bound so the LLM picks whichever fits each question - no planner, no subtasks |
-| 11 | `stage11_research_agent/` | `search_web` (only) | Stage 2's agent narrowed to one tool plus a `SystemMessage` declaring it a "Research Agent" - specialization instead of tool selection |
-| 12 | `stage12_two_specialist_agents/` | `search_web` (Research Agent) and `search_knowledge_base` (Knowledge Agent), each bound to its own separate graph | Two independent specialists, Stage 11's pattern repeated twice with different tools/identities, picked by a hard-coded prefix in `main()` |
-| 13 | `stage13_supervisor/` | Same two specialists as Stage 12, now as subgraphs inside one outer graph | A supervisor node (structured LLM output) reads the question and routes it to whichever specialist fits, replacing the hard-coded prefix |
-| 14 | `stage14_critic/` | Same two specialists and supervisor as Stage 13 | A critic node reviews the specialist's answer (structured LLM output: pass/retry) and can send one bounded retry back to the *same* specialist with feedback attached |
-| 15 | `stage15_analysis_agent/` | `calculate` (safe `ast`-based arithmetic evaluator, its only tool) | A third independent specialist (Stage 11/12's pattern again) for calculations, percentages, and comparisons over numbers given in the conversation — no retrieval, no supervisor wiring |
-| 16 | `stage16_three_specialist_supervisor/` | Same three specialists as Stage 15 (Research, Knowledge, Analysis), now all as subgraphs inside the Stage 13/14 supervisor+critic graph | Extends Stage 13's supervisor and Stage 14's critic to route to all three specialists instead of two; the critic needed zero code changes since it never special-cased which specialist produced an answer |
-| 17 | `stage17_final_multi_agent_system/` | Stage 7/8's planner + human-approval loop, wrapped around Stage 16's supervisor+critic graph instead of a plain LLM call or a flat tool agent | The final combined multi-agent research assistant - proves a compiled `StateGraph` invoked inside a node is just a function call, so *any* compiled graph (not just a flat tool agent) can sit in the planner's per-subtask slot |
-| 18 | `stage18_postgres_persistence/` | — (no tool; reuses Stage 17's graph unchanged) | Stage 17's exact graph with `MemorySaver` swapped for `PostgresSaver` (Postgres via Docker Compose), so a paused-for-approval or completed conversation survives a Python process restart |
-| 19 | `stage19_fastapi_backend/` | — (no new tool; reuses Stage 18's graph unchanged) | Stage 18's exact graph exposed as a FastAPI HTTP API (`/health`, `/chat`, `/approve`, `/reject`) instead of a REPL, same Postgres-backed checkpointer |
-| 20 | `stage20_document_upload/` | — (no new agent tool; a new HTTP route, `POST /documents/upload`) | Stage 19's exact app plus one route that validates, extracts, chunks, and durably stores an uploaded PDF/TXT/DOCX file in two new hand-written Postgres tables (`documents`, `document_chunks`) — storage only, no embeddings/retrieval |
-| 21 | `stage21_semantic_search/` | — (no new agent tool; two new HTTP routes, `POST /documents/backfill-embeddings` and `POST /documents/search`) | Stage 20's exact app plus an `embedding vector(1536)` column on `document_chunks` (`pgvector`), embedding generation on upload, a backfill route for pre-existing chunks, and cosine-similarity search with configurable `top_k`/threshold/document scoping — search only, no RAG/agent wiring |
-| 22 | `stage22_knowledge_agent_rag/` | `search_uploaded_documents` (Knowledge Agent's tool, replacing `search_knowledge_base` in this stage's own copy) | Stage 21's exact app with the Knowledge Agent's tool swapped: it now answers from user-uploaded documents (`document_chunks` via `pgvector`, in-process) instead of the bundled `knowledge_base/*.md` — a replacement, not an addition, so the bundled knowledge base is unreachable from this stage for normal queries |
-| 23 | `stage23_user_document_isolation/` | `search_uploaded_documents` (Knowledge Agent's tool, now scoped per-user via `InjectedState`) | Stage 22's exact app with every uploaded document owned by a caller-supplied `user_id` (`documents.user_id`, migrated onto the existing shared table) and both retrieval paths — `POST /documents/search` and the Knowledge Agent's tool — filtered by it, so one user's uploads can never be returned to another user |
-| 24 | `stage24_security_guardrails/` | `search_uploaded_documents` (unchanged tool, now wrapped output) | Stage 23's exact app hardened against malicious/malformed input across eight areas — file/dangerous-file validation, API input limits, prompt-injection defense for retrieved document content, an output leak guard, integration with Stage 23's permission boundary, in-process per-route rate limiting, and safe error handling — no new capability, no authentication |
-| 25 | `stage25_react_ui/` | No new agent tool; two new/changed HTTP surfaces, `GET /documents` and a `trace` field on `ThreadStatusResponse` | Stage 24's exact app plus a React + TypeScript frontend (document upload/list, chat, human approval, execution trace) and the two additive backend changes the UI needs — no LangGraph node, edge, prompt, or tool changes, no authentication |
+| 1 | `stages/stage1_chatbot/` | — (no tool yet) | Terminal chatbot that remembers the conversation per thread |
+| 2 | `stages/stage2_tool_agent/` | `DuckDuckGoSearchRun` | Agent searches the web when it doesn't know the answer |
+| 3 | `stages/stage3_rag/` | `search_knowledge_base` | Agent retrieves grounded answers from local markdown docs |
+| 4 | `stages/stage4_web_fetch/` | `fetch_webpage` | Agent fetches a specific URL and reads its text content |
+| 5 | `stages/stage5_pdf_fetch/` | `fetch_pdf` | Agent downloads a PDF and reads its extracted text content |
+| 6 | `stages/stage6_planner/` | — (no tool; plain LLM calls) | Breaks a research question into subtasks, answers each, combines into a final answer |
+| 7 | `stages/stage7_human_in_loop/` | — (no tool; reuses Stage 6's planner) | Shows the research plan and pauses for human y/n approval before any subtask research runs |
+| 8 | `stages/stage8_research_workflow/` | `search_web`, `search_knowledge_base`, `fetch_webpage`, `fetch_pdf` (all four, bound together) | Reuses Stage 7's planner unchanged; each subtask is researched by a small tool-calling agent that picks whichever of the four existing tools fits |
+| 9 | `stages/stage9_simple_memory/` | — (no tool; `save_memory`/`load_memory` outside the graph) | Stage 1's chatbot plus a JSON-file long-term memory: `remember: <text>` saves a fact, `recall` retrieves it, surviving across threads and process restarts |
+| 10 | `stages/stage10_multi_tool_agent/` | `search_web`, `search_knowledge_base`, `fetch_webpage`, `fetch_pdf` (all four, bound together) | Stage 2's flat `agent -> tools -> agent` chat loop, with all four tools bound so the LLM picks whichever fits each question - no planner, no subtasks |
+| 11 | `stages/stage11_research_agent/` | `search_web` (only) | Stage 2's agent narrowed to one tool plus a `SystemMessage` declaring it a "Research Agent" - specialization instead of tool selection |
+| 12 | `stages/stage12_two_specialist_agents/` | `search_web` (Research Agent) and `search_knowledge_base` (Knowledge Agent), each bound to its own separate graph | Two independent specialists, Stage 11's pattern repeated twice with different tools/identities, picked by a hard-coded prefix in `main()` |
+| 13 | `stages/stage13_supervisor/` | Same two specialists as Stage 12, now as subgraphs inside one outer graph | A supervisor node (structured LLM output) reads the question and routes it to whichever specialist fits, replacing the hard-coded prefix |
+| 14 | `stages/stage14_critic/` | Same two specialists and supervisor as Stage 13 | A critic node reviews the specialist's answer (structured LLM output: pass/retry) and can send one bounded retry back to the *same* specialist with feedback attached |
+| 15 | `stages/stage15_analysis_agent/` | `calculate` (safe `ast`-based arithmetic evaluator, its only tool) | A third independent specialist (Stage 11/12's pattern again) for calculations, percentages, and comparisons over numbers given in the conversation — no retrieval, no supervisor wiring |
+| 16 | `stages/stage16_three_specialist_supervisor/` | Same three specialists as Stage 15 (Research, Knowledge, Analysis), now all as subgraphs inside the Stage 13/14 supervisor+critic graph | Extends Stage 13's supervisor and Stage 14's critic to route to all three specialists instead of two; the critic needed zero code changes since it never special-cased which specialist produced an answer |
+| 17 | `stages/stage17_final_multi_agent_system/` | Stage 7/8's planner + human-approval loop, wrapped around Stage 16's supervisor+critic graph instead of a plain LLM call or a flat tool agent | The final combined multi-agent research assistant - proves a compiled `StateGraph` invoked inside a node is just a function call, so *any* compiled graph (not just a flat tool agent) can sit in the planner's per-subtask slot |
+| 18 | `stages/stage18_postgres_persistence/` | — (no tool; reuses Stage 17's graph unchanged) | Stage 17's exact graph with `MemorySaver` swapped for `PostgresSaver` (Postgres via Docker Compose), so a paused-for-approval or completed conversation survives a Python process restart |
+| 19 | `stages/stage19_fastapi_backend/` | — (no new tool; reuses Stage 18's graph unchanged) | Stage 18's exact graph exposed as a FastAPI HTTP API (`/health`, `/chat`, `/approve`, `/reject`) instead of a REPL, same Postgres-backed checkpointer |
+| 20 | `stages/stage20_document_upload/` | — (no new agent tool; a new HTTP route, `POST /documents/upload`) | Stage 19's exact app plus one route that validates, extracts, chunks, and durably stores an uploaded PDF/TXT/DOCX file in two new hand-written Postgres tables (`documents`, `document_chunks`) — storage only, no embeddings/retrieval |
+| 21 | `stages/stage21_semantic_search/` | — (no new agent tool; two new HTTP routes, `POST /documents/backfill-embeddings` and `POST /documents/search`) | Stage 20's exact app plus an `embedding vector(1536)` column on `document_chunks` (`pgvector`), embedding generation on upload, a backfill route for pre-existing chunks, and cosine-similarity search with configurable `top_k`/threshold/document scoping — search only, no RAG/agent wiring |
+| 22 | `stages/stage22_knowledge_agent_rag/` | `search_uploaded_documents` (Knowledge Agent's tool, replacing `search_knowledge_base` in this stage's own copy) | Stage 21's exact app with the Knowledge Agent's tool swapped: it now answers from user-uploaded documents (`document_chunks` via `pgvector`, in-process) instead of the bundled `knowledge_base/*.md` — a replacement, not an addition, so the bundled knowledge base is unreachable from this stage for normal queries |
+| 23 | `stages/stage23_user_document_isolation/` | `search_uploaded_documents` (Knowledge Agent's tool, now scoped per-user via `InjectedState`) | Stage 22's exact app with every uploaded document owned by a caller-supplied `user_id` (`documents.user_id`, migrated onto the existing shared table) and both retrieval paths — `POST /documents/search` and the Knowledge Agent's tool — filtered by it, so one user's uploads can never be returned to another user |
+| 24 | `stages/stage24_security_guardrails/` | `search_uploaded_documents` (unchanged tool, now wrapped output) | Stage 23's exact app hardened against malicious/malformed input across eight areas — file/dangerous-file validation, API input limits, prompt-injection defense for retrieved document content, an output leak guard, integration with Stage 23's permission boundary, in-process per-route rate limiting, and safe error handling — no new capability, no authentication |
+| 25 | `stages/stage25_react_ui/` | No new agent tool; two new/changed HTTP surfaces, `GET /documents` and a `trace` field on `ThreadStatusResponse` | Stage 24's exact app plus a React + TypeScript frontend (document upload/list, chat, human approval, execution trace) and the two additive backend changes the UI needs — no LangGraph node, edge, prompt, or tool changes, no authentication |
 
 ## Current tool
 
@@ -362,7 +362,7 @@ adding any new agent capability.
 - **One tool per stage, no shared `common/` module.** Each stage folder
   is self-contained and duplicates setup code on purpose, so any single
   stage is readable top-to-bottom and diffable against the next.
-- **Stage 4 was built as `stage4_web_fetch/`, not `stage4_planner/`.** The
+- **Stage 4 was built as `stages/stage4_web_fetch/`, not `stages/stage4_planner/`.** The
   original roadmap's Stage 4 slot was planning/looping (breaking a
   question into subtasks). Built the web-fetch tool first instead, by
   request — `stage4_planner`'s concept is still unbuilt and open.
@@ -376,19 +376,19 @@ adding any new agent capability.
   known limitation rather than fixed on the spot, since it wasn't part of
   the original Stage 4 scope (HTML only). Instead of extending
   `fetch_webpage`, PDF handling got its own tool/stage
-  (`stage5_pdf_fetch/fetch_pdf`) — keeps one tool per stage rather than
+  (`stages/stage5_pdf_fetch/fetch_pdf`) — keeps one tool per stage rather than
   branching `fetch_webpage` on `Content-Type`.
 - **`fetch_pdf` has no `Content-Type` sniffing or fallback.** It assumes
   the URL points to a PDF, the same way `fetch_webpage` assumes HTML.
   Combining the two into one smart fetch tool was considered and rejected
   for now, to keep each stage's tool minimal and single-purpose.
 
-- **Stage 7 built as `stage7_human_in_loop/`, not `stage5_human_in_loop/`.**
+- **Stage 7 built as `stages/stage7_human_in_loop/`, not `stages/stage5_human_in_loop/`.**
   The original roadmap's Stage 5 slot was human-in-the-loop approval, but
   Stage 5 was already taken by `stage5_pdf_fetch`. Rather than renumber
   existing stages, human-in-the-loop was appended as Stage 7.
 - **Stage 7 reuses Stage 6's planner, not Stage 2's tool agent.** A project
-  spec (`.claude/spec/spec_document.md`) added mid-project defines Stage
+  spec (`docs/specs/spec_document.md`) added mid-project defines Stage
   7's flow as plan -> show plan -> human approves/rejects the whole plan
   once -> approve continues to research / reject stops. An earlier version
   of this stage (built before the spec was read) instead wrapped per-tool-
@@ -535,7 +535,7 @@ adding any new agent capability.
   `main.py` verbatim rather than editing it in place.** Same "previous
   stages left untouched, no shared `common/` module" convention as every
   stage before it. A spec was written and approved first
-  (`.claude/spec/stage20_document_upload_spec.md`) before any code was
+  (`docs/specs/stage20_document_upload_spec.md`) before any code was
   written, per this project's "Claude Code must explain its proposed
   changes before implementing them" rule.
 - **File type detected by filename extension, not `UploadFile.content_type`.**
@@ -554,7 +554,7 @@ adding any new agent capability.
   demonstrate - the test file's direct `pg_conn` queries against those
   tables already prove durability, without needing a second demo script.
 - **Test fixtures added no new binary assets.** The PDF check reuses
-  `stage5_pdf_fetch/test_fetch_pdf.py`'s exact fixture URL (fetched live at
+  `stages/stage5_pdf_fetch/test_fetch_pdf.py`'s exact fixture URL (fetched live at
   test time); the DOCX check generates a file in-memory with
   `python-docx`'s own `Document()`/`.add_paragraph()`/`.save(io.BytesIO())`.
 - **`CHUNK_SIZE`/`CHUNK_OVERLAP` exposed as named module-level constants
@@ -567,7 +567,7 @@ adding any new agent capability.
 - **Stage 21 built as `stage21_semantic_search`, duplicating Stage 20's
   `main.py` verbatim rather than editing it in place.** Same convention as
   every stage before it. A spec was written and approved first
-  (`.claude/spec/stage21_semantic_search_spec.md`), then a plan, before any
+  (`docs/specs/stage21_semantic_search_spec.md`), then a plan, before any
   code was written.
 - **`docker-compose.yml`'s Postgres image swapped from `postgres:16` to
   `pgvector/pgvector:pg16`.** The plain image has no `pgvector` shared
@@ -609,8 +609,8 @@ adding any new agent capability.
 - **Stage 22 built as `stage22_knowledge_agent_rag`, duplicating Stage 21's
   `main.py` rather than editing it in place.** Same convention as every
   stage before it. A spec was written and approved first
-  (`.claude/spec/stage22_knowledge_agent_rag_spec.md`), then a plan
-  (`.claude/plans/stage22_knowledge_agent_rag_plan.md`), before any code
+  (`docs/specs/stage22_knowledge_agent_rag_spec.md`), then a plan
+  (`docs/plans/stage22_knowledge_agent_rag_plan.md`), before any code
   was written.
 - **Replacement, not addition, for the Knowledge Agent's tool.** The
   originally-previewed design (Stage 21 §14, this project's own default
@@ -635,8 +635,8 @@ adding any new agent capability.
 - **Stage 24 built as `stage24_security_guardrails`, duplicating Stage 23's
   `main.py` rather than editing it in place.** Same convention as every
   stage before it. A spec was written and approved first
-  (`.claude/spec/stage24_security_guardrails_spec.md`), then a plan
-  (`.claude/plans/staged-puzzling-pine.md`), before any code was written.
+  (`docs/specs/stage24_security_guardrails_spec.md`), then a plan
+  (`docs/plans/staged-puzzling-pine.md`), before any code was written.
   An early, unreviewed draft of `main.py` existed on disk from before the
   spec review; per explicit instruction it was used only as a reference
   during implementation, not copied wholesale - the final file was built
@@ -671,11 +671,11 @@ adding any new agent capability.
   properly but is exactly the "unnecessary infrastructure" this stage was
   asked to avoid.
 - **Stage 25 built as `stage25_react_ui`, duplicating Stage 24's `main.py`
-  into `stage25_react_ui/backend/main.py` rather than editing it in
+  into `stages/stage25_react_ui/backend/main.py` rather than editing it in
   place.** Same convention as every stage before it. A spec was written
-  and approved first (`.claude/spec/stage25_react_ui_spec.md`), then a
-  plan (`.claude/plans/stage25_react_ui_plan.md`), before any code was
-  written. `stage24_security_guardrails/` is untouched.
+  and approved first (`docs/specs/stage25_react_ui_spec.md`), then a
+  plan (`docs/plans/stage25_react_ui_plan.md`), before any code was
+  written. `stages/stage24_security_guardrails/` is untouched.
 - **Two confirmed additive backend changes, nothing else.** `GET
   /documents` and a `trace` field on `ThreadStatusResponse` were the only
   two of ten UI requirements the existing API couldn't satisfy as-is —
@@ -722,8 +722,8 @@ adding any new agent capability.
   already-running backend process was fine. Cause: `python-dotenv`'s
   `find_dotenv()` walks upward from the *calling script's own directory*
   looking for a file literally named `.env` and stops at the first match
-  - `stage25_react_ui/.env` (created for Vite, per this stage's own setup
-  instructions) sat between `stage25_react_ui/backend/main.py` and the
+  - `stages/stage25_react_ui/.env` (created for Vite, per this stage's own setup
+  instructions) sat between `stages/stage25_react_ui/backend/main.py` and the
   real root `.env`, shadowing it for any fresh process. The already-
   running server was unaffected only because it had loaded its env
   *before* that file was created - a false sense of safety that a
@@ -739,7 +739,7 @@ None - Stage 25 (`stage25_react_ui`) is the most recent addition, giving
 Stage 24's app a browser-based UI. Stage 17
 (`stage17_final_multi_agent_system`) closed the project's original
 roadmap: it fulfills the spec's unnumbered final "Stage 14 — Final
-Multi-Agent Research Assistant" (`.claude/spec/spec_document.md`) item,
+Multi-Agent Research Assistant" (`docs/specs/spec_document.md`) item,
 and goes a step further than that diagram by also folding in planning and
 human-in-the-loop approval (Stage 7/8) around the supervisor+critic
 pipeline (Stage 16). Stages 18-25 all extend past that closed roadmap -

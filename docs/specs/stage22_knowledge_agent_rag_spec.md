@@ -10,7 +10,7 @@ Stage 22  Knowledge Agent RAG            → Next (this spec)
 
 Like Stage 18-21, Stage 22 is a deliberate extension past the original
 roadmap in `spec_document.md`, not a numbered item from it. It builds on
-Stage 21's semantic search (`stage21_semantic_search/`) the same way every
+Stage 21's semantic search (`stages/stage21_semantic_search/`) the same way every
 prior stage built on the one before it: a new stage folder that duplicates
 what it needs rather than editing the previous stage in place, per
 `CLAUDE.md`'s "previous stages left untouched, no shared `common/` module"
@@ -137,7 +137,7 @@ sees:
 
 ## 5. Knowledge Agent Prompt & Identity Change
 
-Current (`stage21_semantic_search/main.py:125-132`):
+Current (`stages/stage21_semantic_search/main.py:125-132`):
 
 > "You are a Knowledge Agent, a specialist whose only job is answering
 > questions from a local knowledge base of documents. You have one tool:
@@ -182,7 +182,7 @@ Stage 22 duplicates Stage 21's `main.py` (per convention), then:
   call for the bundled knowledge base
 - The `search_knowledge_base` tool definition
 - The `knowledge_base/*.md` directory itself is **not duplicated** into
-  `stage22_knowledge_agent_rag/` — there is nothing in this stage that
+  `stages/stage22_knowledge_agent_rag/` — there is nothing in this stage that
   reads it, so copying it forward would be dead weight, not "historical
   compatibility." (The files remain untouched in Stage 3 through Stage 21's
   folders — that's where "historical compatibility" lives.)

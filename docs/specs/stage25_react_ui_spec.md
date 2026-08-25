@@ -89,9 +89,9 @@ minimal shape it takes.
 **Where this code lives, consistent with this project's own convention:**
 every stage duplicates the previous stage's `main.py` rather than editing
 it in place (`CLAUDE.md`). Stage 25 continues that pattern — §3.1 and
-§3.2 live in a **new** `stage25_react_ui/backend/main.py` that is Stage
+§3.2 live in a **new** `stages/stage25_react_ui/backend/main.py` that is Stage
 24's file plus exactly these additions, not an edit to
-`stage24_security_guardrails/main.py`. Stage 24 is left byte-for-byte
+`stages/stage24_security_guardrails/main.py`. Stage 24 is left byte-for-byte
 untouched, same as every earlier stage is untouched by every later one.
 Both additions are read-only/data-plumbing changes against tables and
 values that already exist — neither adds a capability, an agent, or a
@@ -168,7 +168,7 @@ new capability, not a new agent, not a change to the graph.
 
 Requirement 3 asks the UI to show which agents/tools ran and their
 status. Inside `research_subtask()` and `knowledge_node()`
-(`stage24_security_guardrails/main.py`), this data already exists in
+(`stages/stage24_security_guardrails/main.py`), this data already exists in
 memory on every call — `result["next"]` (which specialist the supervisor
 picked), `result["verdict"]`/`result["retry_count"]` (the critic's
 judgment), and which tool a specialist's subgraph invoked
@@ -289,7 +289,7 @@ on how the app is served in dev vs. any future deployment.
 The full contract the React app is built against — Stage 24's seven
 existing routes, unchanged, plus the two confirmed additions from §3.1
 and §3.2. Every request/response shape below is copied from
-`stage24_security_guardrails/main.py`'s actual Pydantic models (or, for
+`stages/stage24_security_guardrails/main.py`'s actual Pydantic models (or, for
 the two additions, the confirmed shape defined in §3), not approximated.
 
 ### 4.1 Endpoint summary
@@ -698,7 +698,7 @@ needed (§12) for one screen:
 ## 12. Project Structure
 
 ```
-stage25_react_ui/
+stages/stage25_react_ui/
 ├── backend/
 │   └── main.py          # Stage 24's main.py + §3.1/§3.2 (confirmed) + §3.3 (CORS)
 ├── README.md             # this stage's README, per CLAUDE.md's convention
@@ -853,7 +853,7 @@ design questions, as of this revision.
   §3.2) are confirmed and no longer open.
 - Exact folder name (`stage25_react_ui` proposed, following the
   `stageN_<topic>` convention) and whether the backend delta (§3) lives
-  at `stage25_react_ui/backend/main.py` as proposed, or elsewhere.
+  at `stages/stage25_react_ui/backend/main.py` as proposed, or elsewhere.
 - Styling approach (§12): CSS Modules (default recommendation) vs.
   Tailwind vs. another minimal option.
 - Upload progress UX (§5): indeterminate spinner (default recommendation)

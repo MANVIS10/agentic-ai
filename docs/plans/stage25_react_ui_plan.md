@@ -2,7 +2,7 @@
 
 ## Context
 
-`.claude/spec/stage25_react_ui_spec.md` (approved, including its two
+`docs/specs/stage25_react_ui_spec.md` (approved, including its two
 confirmed backend additions in §3.1/§3.2) defines Stage 25: a React +
 TypeScript single-page app that gives Stage 24's FastAPI backend a real
 UI — document upload/list, chat, human approval, and an agent execution
@@ -13,21 +13,21 @@ an implementation order.
 Two backend additions are required and already confirmed by the spec:
 `GET /documents` (§3.1) and a `trace` field on `ThreadStatusResponse`
 (§3.2), plus CORS middleware (§3.3, needed for any browser client to
-reach the API). All three live in a **new** `stage25_react_ui/backend/main.py`
-— a duplicate of `stage24_security_guardrails/main.py` plus exactly these
+reach the API). All three live in a **new** `stages/stage25_react_ui/backend/main.py`
+— a duplicate of `stages/stage24_security_guardrails/main.py` plus exactly these
 changes — per this project's "duplicate, don't edit" convention.
-`stage24_security_guardrails/` is not touched.
+`stages/stage24_security_guardrails/` is not touched.
 
 ## Files
 
 **Created:**
-- `stage25_react_ui/backend/main.py` — Stage 24's file + §1 below
-- `stage25_react_ui/backend/test_react_ui_backend.py` — standalone script
+- `stages/stage25_react_ui/backend/main.py` — Stage 24's file + §1 below
+- `stages/stage25_react_ui/backend/test_react_ui_backend.py` — standalone script
   (asserts + prints, `TestClient`, real Postgres/OpenAI), covering the
   backend delta only
-- `stage25_react_ui/` — Vite React+TS app: `package.json`, `tsconfig.json`,
+- `stages/stage25_react_ui/` — Vite React+TS app: `package.json`, `tsconfig.json`,
   `vite.config.ts`, `.env.example`, `src/**` (laid out in spec §12)
-- `stage25_react_ui/README.md` — per `CLAUDE.md`'s convention
+- `stages/stage25_react_ui/README.md` — per `CLAUDE.md`'s convention
 
 **Not touched:** every `stage1-24_*/` folder, `requirements.txt`,
 `docker-compose.yml`. Top-level `README.md`/`PROGRESS.md` updates are
@@ -38,7 +38,7 @@ deferred to a separate step after implementation + testing are verified
 
 ## 1. Minimal FastAPI backend changes
 
-All in `stage25_react_ui/backend/main.py`, a copy of Stage 24's file.
+All in `stages/stage25_react_ui/backend/main.py`, a copy of Stage 24's file.
 
 **CORS (§9 of this plan / spec §3.3):**
 ```python
@@ -160,7 +160,7 @@ every constant/model not listed above are copied verbatim from Stage 24.
 
 ## 2. React project setup
 
-`stage25_react_ui/` (project root for this stage, `backend/` as a
+`stages/stage25_react_ui/` (project root for this stage, `backend/` as a
 subfolder per §1):
 
 - Scaffold with Vite's `react-ts` template (`npm create vite@latest . --
@@ -306,7 +306,7 @@ Covered concretely in §1 above — `CORSMiddleware`, allow-listing only
 
 ## 10. Testing
 
-**Backend (`stage25_react_ui/backend/test_react_ui_backend.py`)** —
+**Backend (`stages/stage25_react_ui/backend/test_react_ui_backend.py`)** —
 standalone script, `TestClient`, real Postgres/OpenAI (project
 convention, no mocking):
 - `GET /documents` returns only the calling user's documents (two-user
@@ -337,7 +337,7 @@ convention, no mocking):
 **Frontend** — no new JS test framework introduced (this project has
 never used one; adding Jest/Vitest/Playwright here would be a real new
 dependency for a UI this small). Instead, a manual verification
-checklist in `stage25_react_ui/README.md`, walked through against the
+checklist in `stages/stage25_react_ui/README.md`, walked through against the
 real running backend + real OpenAI in an actual browser: upload a
 document → see it in the sidebar → ask a question about it → see the
 plan → Approve → see the final answer *and* a trace entry showing
@@ -355,16 +355,16 @@ verified.
 
 ## 11. Running React + FastAPI together
 
-Documented in `stage25_react_ui/README.md`, three independent processes
+Documented in `stages/stage25_react_ui/README.md`, three independent processes
 (no reverse proxy, no combined server — out of scope per spec §14):
 
 ```
 docker compose up -d                              # Postgres (unchanged)
-python stage25_react_ui/backend/main.py            # FastAPI on :8000
+python stages/stage25_react_ui/backend/main.py            # FastAPI on :8000
 cd stage25_react_ui && npm install && npm run dev  # Vite on :5173
 ```
 
-`.env.example` documents `VITE_API_BASE_URL`; `stage25_react_ui/backend/`
+`.env.example` documents `VITE_API_BASE_URL`; `stages/stage25_react_ui/backend/`
 reads the same root `.env` (`OPENAI_API_KEY`, `DATABASE_URL`) every
 other stage's `main.py` already does.
 
@@ -372,7 +372,7 @@ other stage's `main.py` already does.
 
 ## Implementation order
 
-1. Backend delta (`stage25_react_ui/backend/main.py`): CORS → `GET
+1. Backend delta (`stages/stage25_react_ui/backend/main.py`): CORS → `GET
    /documents` → `CriticState.tools_used` threading through the three
    specialist nodes → `PlannerState.trace` → `SubtaskTrace`/
    `ThreadStatusResponse.trace` → `approve()`'s response construction.
@@ -390,7 +390,7 @@ other stage's `main.py` already does.
 11. CSS Modules styling pass, applied consistently across the above.
 12. Manual end-to-end verification against the real running backend +
     real OpenAI, walking the full checklist in §10.
-13. Write `stage25_react_ui/README.md` (what was added, architecture,
+13. Write `stages/stage25_react_ui/README.md` (what was added, architecture,
     how to run §11, the manual verification checklist, diff vs. Stage 24).
 14. *Deferred, separate step, not part of this plan*: top-level
     `README.md`/`PROGRESS.md` updates, only after 1-13 are verified
@@ -399,10 +399,10 @@ other stage's `main.py` already does.
 
 ## Verification
 
-- `python stage25_react_ui/backend/test_react_ui_backend.py` passes
+- `python stages/stage25_react_ui/backend/test_react_ui_backend.py` passes
   against the real Postgres/OpenAI backend.
 - Stage 24's own `test_security_guardrails.py` still passes, unmodified,
-  against `stage25_react_ui/backend/main.py`'s `app` — confirms §1 is
+  against `stages/stage25_react_ui/backend/main.py`'s `app` — confirms §1 is
   additive-only.
 - The manual browser checklist in §10 is walked through and confirmed by
   whoever reviews the implementation — this can't be fully automated

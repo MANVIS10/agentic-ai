@@ -11,13 +11,13 @@ Stage 21  Embeddings + retrieval   ⏳ (future, out of scope here)
 
 Like Stage 18 and 19, Stage 20 is a deliberate extension past the original
 roadmap in `spec_document.md`, not a numbered item from it. It builds on
-Stage 19's FastAPI app (`stage19_fastapi_backend/`) the same way Stage 19
+Stage 19's FastAPI app (`stages/stage19_fastapi_backend/`) the same way Stage 19
 built on Stage 18: a new stage folder that duplicates what it needs rather
 than editing the previous stage in place, per this project's "previous
 stages left untouched, no shared `common/` module" rule (`CLAUDE.md`).
 
 This document is a **specification only**. No implementation code is
-written against it yet — see `.claude/plans/` for where the implementation
+written against it yet — see `docs/plans/` for where the implementation
 plan will go once this spec is approved.
 
 ---
@@ -84,7 +84,7 @@ Explicitly not in scope — see §9.
 ### `POST /documents/upload`
 
 Adds one new route to the existing Stage 19 FastAPI app
-(`stage19_fastapi_backend/main.py`'s pattern: Pydantic response models,
+(`stages/stage19_fastapi_backend/main.py`'s pattern: Pydantic response models,
 hand-written `HTTPException` detail strings, no raw exception text
 returned to the client — same conventions as `/chat`, `/approve`,
 `/reject`).

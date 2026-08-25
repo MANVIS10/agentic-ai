@@ -11,7 +11,7 @@ Stage 22  RAG / Knowledge Agent integration  ⏳ (future, out of scope here)
 
 Like Stage 18-20, Stage 21 is a deliberate extension past the original
 roadmap in `spec_document.md`, not a numbered item from it. It builds on
-Stage 20's document-ingestion pipeline (`stage20_document_upload/`) the
+Stage 20's document-ingestion pipeline (`stages/stage20_document_upload/`) the
 same way every prior stage built on the one before it: a new stage folder
 that duplicates what it needs rather than editing the previous stage in
 place, per `CLAUDE.md`'s "previous stages left untouched, no shared

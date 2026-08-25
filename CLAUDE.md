@@ -11,21 +11,25 @@ frameworks; code should stay readable and pedagogical over clever or terse.
 
 ## Setup and running
 
-```
+```bash
+# Windows
 .venv\Scripts\activate
+# macOS / Linux
+source .venv/bin/activate
+
 pip install -r requirements.txt
-python stage1_chatbot/main.py
+python stages/stage1_chatbot/main.py
 ```
 
 `OPENAI_API_KEY` is read from `.env` via `python-dotenv`. There is no build
 step, linter, or test suite configured yet. Where a stage has a test (e.g.
-`stage3_rag/test_search_knowledge_base.py`), it's a standalone script run
+`stages/stage3_rag/test_search_knowledge_base.py`), it's a standalone script run
 directly with `python`, not a pytest suite — asserts + prints, no test
 framework dependency.
 
 ## `app/` package tests (production port)
 
-`app/` is a production-style port of `stage25_react_ui/backend/main.py`
+`app/` is a production-style port of `stages/stage25_react_ui/backend/main.py`
 (see `docs/superpowers/plans/2026-08-25-production-package-port.md`),
 tested with pytest under `tests/`. Unit tests there (`test_config.py`,
 `test_db.py`, `test_tools.py`, `test_agents.py`, `test_graphs.py`,
@@ -40,8 +44,8 @@ tests explicitly rather than running them by default.
 
 ## Architecture: stage folders
 
-Each stage lives in its own top-level folder (`stage1_chatbot/`,
-`stage2_tool_agent/`, ...) and is a **self-contained, runnable script** — not
+Each stage lives in its own top-level folder (`stages/stage1_chatbot/`,
+`stages/stage2_tool_agent/`, ...) and is a **self-contained, runnable script** — not
 a shared library. Later stages are expected to duplicate setup code from
 earlier ones (LLM init, graph boilerplate) rather than import a common
 module. This is deliberate: each folder should be readable top-to-bottom on
@@ -62,29 +66,29 @@ top-level `README.md` excepted).
 The progression so far (see `README.md` and `PROGRESS.md` for the full
 table and status checklist):
 
-1. `stage1_chatbot/` — `StateGraph` + `MemorySaver`, single node, terminal
+1. `stages/stage1_chatbot/` — `StateGraph` + `MemorySaver`, single node, terminal
    REPL with per-thread memory (implemented)
-2. `stage2_tool_agent/` — tool calling / ReAct loop via `bind_tools`,
+2. `stages/stage2_tool_agent/` — tool calling / ReAct loop via `bind_tools`,
    `ToolNode`, and `tools_condition`, using `DuckDuckGoSearchRun` (no API
    key needed) (implemented)
-3. `stage3_rag/` — retrieval over a local markdown knowledge base:
+3. `stages/stage3_rag/` — retrieval over a local markdown knowledge base:
    `RecursiveCharacterTextSplitter` for chunking, `OpenAIEmbeddings`, and
    `InMemoryVectorStore` (no extra vector-store dependency), exposed as a
    single `search_knowledge_base` tool. Same `agent -> tools -> agent`
    conditional-edge shape as Stage 2 (node renamed `chatbot` -> `agent`)
    (implemented)
-4. `stage4_web_fetch/` — `fetch_webpage` tool: fetches a URL over HTTP and
+4. `stages/stage4_web_fetch/` — `fetch_webpage` tool: fetches a URL over HTTP and
    parses its HTML into text with BeautifulSoup, a tool with a real
    external side effect rather than just reading from an index
    (implemented)
-5. `stage5_pdf_fetch/` — `fetch_pdf` tool: downloads a PDF's raw bytes with
+5. `stages/stage5_pdf_fetch/` — `fetch_pdf` tool: downloads a PDF's raw bytes with
    `requests` and extracts its text page-by-page with `pypdf`, no
    `Content-Type` sniffing or HTML fallback (implemented)
-6. `stage6_planner/` — custom state schema + a hand-written conditional
+6. `stages/stage6_planner/` — custom state schema + a hand-written conditional
    edge (no `bind_tools`) that breaks a research question into 2-3
    subtasks, loops over them one at a time, and synthesizes a final answer
    (implemented)
-7. `stage7_human_in_loop/` — Stage 6's planner with one added node,
+7. `stages/stage7_human_in_loop/` — Stage 6's planner with one added node,
    `human_approval`, that calls `interrupt()` once to show the plan and
    wait for human y/n approval before research begins, resumed via
    `Command(resume=...)`; rejection routes straight to `END` with no

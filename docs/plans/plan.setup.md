@@ -1,12 +1,12 @@
-# Plan: Rebuild Stage 7 to match `.claude/spec/spec_document.md`
+# Plan: Rebuild Stage 7 to match `docs/specs/spec_document.md`
 
 ## Context
 
-`.claude/spec/spec_document.md` was added to the repo as the project's
+`docs/specs/spec_document.md` was added to the repo as the project's
 governing spec and describes Stage 7 ("Human-in-the-Loop") as: **Planner ->
 show plan -> human approves/rejects the whole plan once -> approve
 continues to research, reject stops the run**. Earlier this session, before
-this spec was read, a `stage7_human_in_loop/` was already built and
+this spec was read, a `stages/stage7_human_in_loop/` was already built and
 shipped with a *different* design: per-tool-call y/n approval wrapped
 around Stage 2's web-search agent (reject there just skipped that one tool
 call; the LLM kept going).
@@ -19,7 +19,7 @@ to match. This plan also corrects the top-level `README.md` and
 `CLAUDE.md`, since both currently describe the old (now-wrong) Stage 7
 design in their roadmap tables/prose and would otherwise be left stale.
 
-This rebuild **replaces** `stage7_human_in_loop/main.py` and its README
+This rebuild **replaces** `stages/stage7_human_in_loop/main.py` and its README
 in place — same folder and filenames, new contents. It does not create a
 second folder, and it does not touch `stage1`-`stage6`.
 
@@ -117,8 +117,8 @@ used elsewhere in this repo.
 
 ## Files to change
 
-- **`stage7_human_in_loop/main.py`** — full rewrite per the design above.
-- **`stage7_human_in_loop/README.md`** — full rewrite: new flow diagram
+- **`stages/stage7_human_in_loop/main.py`** — full rewrite per the design above.
+- **`stages/stage7_human_in_loop/README.md`** — full rewrite: new flow diagram
   (`plan -> show plan -> human_approval -> approve/reject`), architecture
   section describing the 4-node graph, "concept demonstrated" section
   (interrupt/resume — still accurate, just re-explained against the new
@@ -150,7 +150,7 @@ calls for updating `PROGRESS.md` and the stage README, not the spec file.
 
 ## Verification
 
-1. Run `python stage7_human_in_loop/main.py`, ask a research question,
+1. Run `python stages/stage7_human_in_loop/main.py`, ask a research question,
    confirm the plan prints, confirm the approval prompt appears and the
    graph is genuinely paused (not just delayed) waiting on `input()`.
 2. Answer `y` — confirm it proceeds through `research_subtask` for each

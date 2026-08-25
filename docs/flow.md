@@ -1,7 +1,7 @@
 # Current Flow (Stage 25)
 
 This describes the end-to-end flow of the most complete version of the app —
-`stage25_react_ui/` — which wraps every prior stage's concepts into one
+`stages/stage25_react_ui/` — which wraps every prior stage's concepts into one
 running system. Earlier stages (1-24) still exist as standalone, untouched
 snapshots of one concept each; this file only documents the current
 "full system" state.

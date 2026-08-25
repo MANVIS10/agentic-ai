@@ -62,13 +62,13 @@ Example:
 ```text
 personal-research-assistant/
 
-├── stage1_chatbot/
-├── stage2_tool_agent/
-├── stage3_rag/
-├── stage4_web_fetch/
-├── stage5_pdf_fetch/
-├── stage6_planner/
-├── stage7_human_loop/
+├── stages/stage1_chatbot/
+├── stages/stage2_tool_agent/
+├── stages/stage3_rag/
+├── stages/stage4_web_fetch/
+├── stages/stage5_pdf_fetch/
+├── stages/stage6_planner/
+├── stages/stage7_human_loop/
 │
 ├── CLAUDE.md
 ├── PROJECT_SPEC.md
