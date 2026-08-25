@@ -261,3 +261,16 @@ python stage1_chatbot/main.py
 - [x] Stage 23 — per-user document isolation (`stage23_user_document_isolation`)
 - [x] Stage 24 — security & production guardrails (`stage24_security_guardrails`)
 - [x] Stage 25 — React frontend (`stage25_react_ui`)
+
+## Live deployment
+
+Stage 25 is deployed on free tiers: frontend on Vercel, backend on Render,
+Postgres (with `pgvector`) on Neon.
+
+- Frontend: https://agentic-ai-theta-seven.vercel.app
+- Backend: https://langgraph-backend-29wg.onrender.com
+
+Both free tiers spin down after a period of inactivity, so the first
+request after idling can take 30-60 seconds. See
+[`stage25_react_ui/DEPLOYMENT.md`](stage25_react_ui/DEPLOYMENT.md) for the
+full setup and what was actually done to deploy it.
