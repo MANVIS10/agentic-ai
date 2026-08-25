@@ -23,6 +23,21 @@ step, linter, or test suite configured yet. Where a stage has a test (e.g.
 directly with `python`, not a pytest suite — asserts + prints, no test
 framework dependency.
 
+## `app/` package tests (production port)
+
+`app/` is a production-style port of `stage25_react_ui/backend/main.py`
+(see `docs/superpowers/plans/2026-08-25-production-package-port.md`),
+tested with pytest under `tests/`. Unit tests there (`test_config.py`,
+`test_db.py`, `test_tools.py`, `test_agents.py`, `test_graphs.py`,
+`test_ingestion.py`, `test_security.py`) must **not** call the real OpenAI
+API — no `.invoke()`/`.embed_*()` on a live `ChatOpenAI`/`OpenAIEmbeddings`
+instance during a normal `pytest tests/` run, since that costs money and
+makes the suite non-deterministic and network-dependent. Only an
+end-to-end test explicitly gated behind the `openai_available` fixture
+(skipped whenever `OPENAI_API_KEY` isn't set) may hit the real API — same
+spirit as this project's existing convention of calling out real-API-cost
+tests explicitly rather than running them by default.
+
 ## Architecture: stage folders
 
 Each stage lives in its own top-level folder (`stage1_chatbot/`,
