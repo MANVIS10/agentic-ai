@@ -536,9 +536,18 @@ def test_rate_limiting(client, monkeypatch):
     automatically; the autouse reset_rate_limiter fixture in conftest.py
     clears _rate_limit_state before and after this test regardless.
     """
-    monkeypatch.setattr("app.api.routers.documents.SEARCH_USER_RATE_LIMIT", (3, 2))
+    # The window must be comfortably LONGER than the wall-clock time these
+    # requests take, or the test races itself. /documents/search makes a real
+    # embedding API call (~0.6-1s each), so three sequential searches can take
+    # 2-3s; with the original 2-second window the first request aged out
+    # before the fourth arrived and the limiter correctly returned 200,
+    # failing the test. The limit being exercised is the COUNT (3), not the
+    # window, so a 60s window tests the same property deterministically.
+    # Window EXPIRY is covered separately, without network latency, by
+    # tests/test_security.py::test_rate_limit_window_slides.
+    monkeypatch.setattr("app.api.routers.documents.SEARCH_USER_RATE_LIMIT", (3, 60))
     monkeypatch.setattr(
-        "app.api.routers.documents.SEARCH_IP_RATE_LIMIT", (100_000, 2)
+        "app.api.routers.documents.SEARCH_IP_RATE_LIMIT", (100_000, 60)
     )  # effectively disabled for this check
 
     responses = [search(client, "anything", RATE_LIMIT_USER) for _ in range(3)]
@@ -557,9 +566,10 @@ def test_rate_limiting(client, monkeypatch):
     health_calls = [client.get("/health") for _ in range(10)]
     assert all(r.status_code == 200 for r in health_calls), "/health must never be rate-limited"
 
-    time.sleep(2.1)
-    after_window = search(client, "anything", RATE_LIMIT_USER)
-    assert after_window.status_code == 200, "The rate-limit window must slide, not lock out forever"
+    # Window expiry is asserted in tests/test_security.py against the limiter
+    # directly: doing it here would mean sleeping out the 60s window above,
+    # and a sleep short enough to be practical is exactly what made this test
+    # race against real API latency in the first place.
 
 
 # ---------------------------------------------------------------------------
