@@ -1,8 +1,158 @@
-# Personal Research Assistant — Learning Roadmap
+# Personal Research Assistant
 
-One project, growing stage by stage from a plain chatbot into a multi-agent
-research system. Each stage lives in its own folder so you can look back at
-how the code evolved. Concepts build on each other — don't skip ahead.
+A multi-agent research assistant built on LangGraph and LangChain: it plans a
+research question into subtasks, pauses for your approval, routes each subtask
+to a specialist agent, has a critic review the answer, and synthesizes the
+results — with RAG over documents you upload, all checkpointed to Postgres and
+reachable through a React UI.
+
+The repo holds both the running application and the 25-stage learning archive it
+grew out of.
+
+## Layout
+
+```
+app/        FastAPI + LangGraph backend (the production package)
+frontend/   React + TypeScript UI
+stages/     The 25 learning stages, each self-contained and runnable
+tests/      pytest suite for app/
+docs/       Specs, plans, and the project log
+```
+
+## Architecture
+
+```
+React UI  ──HTTP──▶  FastAPI  ──.invoke() / Command(resume)──▶  LangGraph
+frontend/            app/api/                                   app/graphs/
+                        │
+                        ▼
+                  Postgres + pgvector
+            checkpoints · documents · document_chunks
+```
+
+A request flows through five steps:
+
+1. **Planner** — an LLM breaks the question into 2–3 subtasks.
+2. **Human approval** — the graph calls `interrupt()` and pauses. `/chat`
+   returns the pending plan; `/approve` or `/reject` resumes it via
+   `Command(resume=...)`. Rejection routes straight to `END`.
+3. **Per-subtask research** — each subtask goes to an inner supervisor+critic
+   graph. The **supervisor** routes to one of three specialists:
+
+   | Specialist | Tool |
+   |---|---|
+   | Research Agent | `search_web` (DuckDuckGo) |
+   | Knowledge Agent | `search_uploaded_documents` (pgvector RAG over *your own* uploads) |
+   | Analysis Agent | `calculate` (AST-based arithmetic, no `eval`) |
+
+   The **critic** then judges the answer and can send one bounded retry back to
+   the same specialist with feedback attached.
+4. **Synthesis** — the planner combines every subtask answer into one response.
+5. **Persistence** — every step is checkpointed to Postgres via `PostgresSaver`,
+   so a paused-for-approval conversation survives a backend restart.
+
+## Quickstart
+
+**1. Database** (Postgres with the `pgvector` extension, on port 5433):
+
+```bash
+docker compose up -d
+```
+
+**2. Backend:**
+
+```bash
+# Windows
+.venv\Scripts\activate
+# macOS / Linux
+source .venv/bin/activate
+
+pip install -r requirements.txt
+uvicorn app.main:app --port 8000
+```
+
+`OPENAI_API_KEY` is read from `.env` at the repo root.
+
+**3. Frontend:**
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+The UI expects the backend at `http://localhost:8000` — see
+`frontend/.env.example`.
+
+## API
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/health` | Liveness plus a database round-trip |
+| `POST` | `/chat` | Ask a question; returns the plan, pending approval |
+| `POST` | `/approve` | Resume the paused graph and run the research |
+| `POST` | `/reject` | Discard the plan without researching |
+| `GET` | `/documents` | List the calling user's uploaded documents |
+| `POST` | `/documents/upload` | Validate, extract, chunk, embed, and store a PDF/TXT/DOCX |
+| `POST` | `/documents/search` | Cosine-similarity search over that user's own chunks |
+
+## Tests
+
+```bash
+pytest tests/
+```
+
+Requires the Postgres container running and `OPENAI_API_KEY` set — the
+end-to-end tests call the real OpenAI API, so a full run costs money and takes
+several minutes. Unit tests (`test_config`, `test_tools`, `test_agents`,
+`test_graphs`, `test_security`, `test_ingestion`, `test_schema_parity`) do not
+hit the network:
+
+```bash
+pytest tests/ --ignore=tests/test_app_backend.py
+```
+
+## Known limitations
+
+Stated plainly rather than left to be discovered:
+
+- **No authentication.** `user_id` is self-asserted by the caller. Per-user
+  document isolation is enforced on every retrieval path, but there is no
+  identity behind it — anyone who knows a `user_id` can read those documents.
+- **No streaming.** `/chat` and `/approve` are single blocking calls, so the
+  trace panel populates once at the end rather than as a live feed.
+- **Rate limiting is in-process.** An unbounded dict with no TTL eviction, not
+  Redis. It does not survive a restart and does not coordinate across replicas.
+- **Subtasks run sequentially**, one at a time, even when independent.
+- **One shared database connection**, not a pool.
+- `search_web` results are not wrapped in the untrusted-content envelope that
+  guards retrieved documents — a known, deliberate gap.
+
+## Live deployment
+
+Deployed on free tiers: frontend on Vercel, backend on Render, Postgres (with
+`pgvector`) on Neon.
+
+- Frontend: https://agentic-ai-theta-seven.vercel.app
+- Backend: https://langgraph-backend-29wg.onrender.com
+
+Both tiers spin down after inactivity, so the first request after idling can
+take 30–60 seconds. See
+[`stages/stage25_react_ui/DEPLOYMENT.md`](stages/stage25_react_ui/DEPLOYMENT.md)
+for the full setup.
+
+---
+
+# Learning archive
+
+The 25 stages below are how this was built — one concept at a time, each folder
+self-contained and runnable on its own, so any stage can be diffed against the
+next to see exactly what was added. They are kept frozen; `app/` is the
+consolidated production port of Stage 25.
+
+```bash
+python stages/stage1_chatbot/main.py
+```
 
 ## Stages
 
@@ -216,65 +366,3 @@ adjacent concepts are taught together within a single stage folder:
   blocking call, so the trace panel populates once, after the fact, never
   as a live feed (see `docs/specs/stage25_react_ui_spec.md`).
 
-## Setup
-
- virtual environment— `.venv` is used below
-— and consider deleting the other once you've confirmed which you're using.
-
-```bash
-# Windows
-.venv\Scripts\activate
-# macOS / Linux
-source .venv/bin/activate
-
-pip install -r requirements.txt
-```
-
-`OPENAI_API_KEY` is already set in `.env`.
-
-## Running a stage
-
-```
-python stages/stage1_chatbot/main.py
-```
-
-## Status
-
-- [x] Stage 1 — scaffolded
-- [x] Stage 2
-- [x] Stage 3
-- [x] Stage 4 (`stage4_web_fetch`)
-- [x] Stage 5 (`stage5_pdf_fetch`)
-- [x] Stage 6 (`stage6_planner`)
-- [x] Stage 7 (`stage7_human_in_loop`)
-- [x] Stage 8 (`stage8_research_workflow`)
-- [x] Stage 9 (`stage9_simple_memory`)
-- [x] Stage 10 (`stage10_multi_tool_agent`)
-- [x] Stage 11 (`stage11_research_agent`)
-- [x] Stage 12 (`stage12_two_specialist_agents`)
-- [x] Stage 13 (`stage13_supervisor`)
-- [x] Stage 14 (`stage14_critic`)
-- [x] Stage 15 (`stage15_analysis_agent`)
-- [x] Stage 16 (`stage16_three_specialist_supervisor`)
-- [x] Final combined multi-agent system (`stage17_final_multi_agent_system`)
-- [x] Stage 18 — durable Postgres checkpointing (`stage18_postgres_persistence`)
-- [x] Stage 19 — FastAPI HTTP backend (`stage19_fastapi_backend`)
-- [x] Stage 20 — document upload & ingestion (`stage20_document_upload`)
-- [x] Stage 21 — embeddings & semantic vector search (`stage21_semantic_search`)
-- [x] Stage 22 — Knowledge Agent RAG over uploaded documents (`stage22_knowledge_agent_rag`)
-- [x] Stage 23 — per-user document isolation (`stage23_user_document_isolation`)
-- [x] Stage 24 — security & production guardrails (`stage24_security_guardrails`)
-- [x] Stage 25 — React frontend (`stage25_react_ui`)
-
-## Live deployment
-
-Stage 25 is deployed on free tiers: frontend on Vercel, backend on Render,
-Postgres (with `pgvector`) on Neon.
-
-- Frontend: https://agentic-ai-theta-seven.vercel.app
-- Backend: https://langgraph-backend-29wg.onrender.com
-
-Both free tiers spin down after a period of inactivity, so the first
-request after idling can take 30-60 seconds. See
-[`stages/stage25_react_ui/DEPLOYMENT.md`](stages/stage25_react_ui/DEPLOYMENT.md) for the
-full setup and what was actually done to deploy it.
