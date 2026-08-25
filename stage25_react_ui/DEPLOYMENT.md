@@ -85,3 +85,48 @@ own README describes for local dev. Check the browser console for CORS
 errors first if anything fails silently; that almost always means
 `ALLOWED_ORIGINS` (backend) or `VITE_API_BASE_URL` (frontend) doesn't
 exactly match the other service's real URL.
+
+## What was actually deployed (2026-08-25)
+
+The steps above were carried out for real against live accounts, driven
+through a Chrome browser session (GitHub OAuth/App-install clicks done by
+the account owner, everything else automated). Record of the result:
+
+| Piece | Service | Live URL |
+|---|---|---|
+| Database | Neon (project "mutli agent research ai", `neondb`, `us-east-1`, pooled connection) | *(connection string held in Render's `DATABASE_URL`, not repeated here)* |
+| Backend | Render (`langgraph-backend`, free web service) | https://langgraph-backend-29wg.onrender.com |
+| Frontend | Vercel (`agentic-ai` project, root dir `stage25_react_ui`) | https://agentic-ai-theta-seven.vercel.app |
+
+Deviations from a from-scratch walkthrough:
+
+- **Neon and Render accounts already existed** (signed in via GitHub SSO
+  that was already authorized in the browser) — a Neon project named
+  "mutli agent research ai" was already sitting there and was reused
+  as-is rather than creating a new one.
+- **Vercel was a fresh account.** Signing up required a GitHub OAuth
+  authorize step and a separate GitHub App install step (granting Vercel
+  access to repos) — both done by the account owner, not automated,
+  since they're account-identity actions.
+- **Vercel's per-deployment preview URL is not the production URL.** The
+  deploy-success screen showed `agentic-*-manvis10.vercel.app`
+  (deployment-specific, sits behind Vercel's SSO wall). The actual stable
+  production domain (`agentic-ai-theta-seven.vercel.app`, no auth wall)
+  only showed up on the project's Settings → Domains page — worth
+  checking there rather than trusting the immediate post-deploy redirect.
+- **A same-name trap**: this account already had an unrelated Next.js
+  project at `agentic-ai.vercel.app` (note: no `-theta-seven` suffix).
+  Vercel silently disambiguated the new project's actual domain rather
+  than erroring on the name collision — curling `agentic-ai.vercel.app`
+  during verification returned `200` but served the *wrong* app
+  (`_next/static` chunks, not this stage's Vite build). Confirmed the
+  right one by checking for Vite's own asset path shape
+  (`/assets/index-*.js`) and the page `<title>` ("Research Assistant").
+- **CORS was verified directly**, not just assumed from a successful
+  deploy: an `OPTIONS` preflight from the actual frontend origin against
+  the actual backend confirmed `access-control-allow-origin` echoed back
+  correctly after `ALLOWED_ORIGINS` was set and the backend redeployed.
+- **One transient `"Database unavailable"` `/health` response** was seen
+  immediately after the `ALLOWED_ORIGINS` redeploy — resolved on its own
+  within ~5 seconds on retry, consistent with Neon's compute waking from
+  auto-suspend rather than a real misconfiguration.
