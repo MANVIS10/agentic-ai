@@ -31,7 +31,7 @@ class CriticState(MessagesState):
     # current answer, for the execution trace
 
 
-def research_node(state: CriticState):
+async def research_node(state: CriticState):
     """Run the Research Agent subgraph and hand back only its final answer."""
     messages = state["messages"]
     if state.get("feedback"):
@@ -41,12 +41,12 @@ def research_node(state: CriticState):
                 "Please address this and try again."
             )
         ]
-    result = research_graph.invoke({"messages": messages})
+    result = await research_graph.ainvoke({"messages": messages})
     tool_names = [m.name for m in result["messages"] if isinstance(m, ToolMessage)]
     return {"messages": [result["messages"][-1]], "tools_used": tool_names}
 
 
-def knowledge_node(state: CriticState):
+async def knowledge_node(state: CriticState):
     """Run the Knowledge Agent subgraph and hand back only its final
     answer. Passes user_id into knowledge_graph's own state (KnowledgeState)
     so search_uploaded_documents's InjectedState argument can see it
@@ -64,7 +64,7 @@ def knowledge_node(state: CriticState):
                 "Please address this and try again."
             )
         ]
-    result = knowledge_graph.invoke({"messages": messages, "user_id": state["user_id"]})
+    result = await knowledge_graph.ainvoke({"messages": messages, "user_id": state["user_id"]})
     answer_message = result["messages"][-1]
     tool_names = [m.name for m in result["messages"] if isinstance(m, ToolMessage)]
 
@@ -78,7 +78,7 @@ def knowledge_node(state: CriticState):
     return {"messages": [answer_message], "tools_used": tool_names}
 
 
-def analysis_node(state: CriticState):
+async def analysis_node(state: CriticState):
     """Run the Analysis Agent subgraph and hand back only its final answer."""
     messages = state["messages"]
     if state.get("feedback"):
@@ -88,7 +88,7 @@ def analysis_node(state: CriticState):
                 "Please address this and try again."
             )
         ]
-    result = analysis_graph.invoke({"messages": messages})
+    result = await analysis_graph.ainvoke({"messages": messages})
     tool_names = [m.name for m in result["messages"] if isinstance(m, ToolMessage)]
     return {"messages": [result["messages"][-1]], "tools_used": tool_names}
 

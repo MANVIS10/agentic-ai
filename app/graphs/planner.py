@@ -7,7 +7,7 @@ Here that's wrapped in `build_graph(checkpointer)` so importing this module
 needs no database connection - the builder wiring itself is unchanged.
 """
 
-from langgraph.checkpoint.postgres import PostgresSaver
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import interrupt
@@ -31,14 +31,14 @@ class PlannerState(TypedDict):
     # in this file is always a TypedDict/plain dict, never a BaseModel)
 
 
-def plan(state: PlannerState):
+async def plan(state: PlannerState):
     prompt = (
         "Break the following research question into 2-3 short, concrete "
         "subtasks that could each be researched independently. "
         "Reply with just the subtasks, one per line, no numbering.\n\n"
         f"Question: {state['question']}"
     )
-    response = chat_llm.invoke(prompt)
+    response = await chat_llm.ainvoke(prompt)
     subtasks = [line.strip() for line in response.content.splitlines() if line.strip()]
 
     print(f"\nPlan ({len(subtasks)} subtasks):")
@@ -82,7 +82,7 @@ def route_after_approval(state: PlannerState) -> str:
     return has_more_subtasks(state)
 
 
-def research_subtask(state: PlannerState):
+async def research_subtask(state: PlannerState):
     """Research one subtask by running it through the full
     supervisor -> specialist -> critic pipeline, instead of a bare LLM call
     (Stage 6/7) or a single flat tool agent (Stage 8).
@@ -96,7 +96,7 @@ def research_subtask(state: PlannerState):
     subtask = state["subtasks"][state["current_index"]]
     print(f"\nResearching: {subtask}")
 
-    result = supervisor_critic_graph.invoke(
+    result = await supervisor_critic_graph.ainvoke(
         {"messages": [{"role": "user", "content": subtask}], "user_id": state["user_id"]}
     )
     print(f"  [Supervisor routed to: {result['next']}]")
@@ -131,7 +131,7 @@ def research_subtask(state: PlannerState):
     }
 
 
-def synthesize(state: PlannerState):
+async def synthesize(state: PlannerState):
     subtasks_and_results = "\n\n".join(
         f"Subtask: {subtask}\nAnswer: {result}"
         for subtask, result in zip(state["subtasks"], state["results"])
@@ -141,11 +141,11 @@ def synthesize(state: PlannerState):
         f"Research notes:\n{subtasks_and_results}\n\n"
         "Combine these into one clear final answer to the original question."
     )
-    response = chat_llm.invoke(prompt)
+    response = await chat_llm.ainvoke(prompt)
     return {"final_answer": response.content}
 
 
-def build_graph(checkpointer: PostgresSaver) -> CompiledStateGraph:
+def build_graph(checkpointer: AsyncPostgresSaver) -> CompiledStateGraph:
     """Builds and compiles the outer planner graph against the given
     checkpointer. A function instead of the original's module-scope
     `graph = graph_builder.compile(checkpointer=checkpointer)` so importing

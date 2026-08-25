@@ -26,9 +26,9 @@ knowledge_tools = [search_uploaded_documents]
 knowledge_llm_with_tools = knowledge_llm.bind_tools(knowledge_tools)
 
 
-def knowledge_agent_node(state: KnowledgeState):
+async def knowledge_agent_node(state: KnowledgeState):
     messages = [SystemMessage(content=KNOWLEDGE_SYSTEM_PROMPT), *state["messages"]]
-    response = knowledge_llm_with_tools.invoke(messages)
+    response = await knowledge_llm_with_tools.ainvoke(messages)
     return {"messages": [response]}
 
 

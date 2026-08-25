@@ -18,14 +18,14 @@ from app.llm import Review, critic_llm
 __all__ = ["Review", "critic_node", "route_from_critic"]
 
 
-def critic_node(state: dict):
+async def critic_node(state: dict):
     question = state["messages"][0].content
     answer = state["messages"][-1].content
     messages = [
         SystemMessage(content=CRITIC_SYSTEM_PROMPT),
         HumanMessage(content=f"Question: {question}\n\nAnswer: {answer}"),
     ]
-    review: Review = critic_llm.invoke(messages)
+    review: Review = await critic_llm.ainvoke(messages)
 
     if review["verdict"] == "retry" and state["retry_count"] < MAX_RETRIES:
         return {

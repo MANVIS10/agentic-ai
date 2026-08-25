@@ -14,9 +14,9 @@ research_tools = [search_web]
 research_llm_with_tools = research_llm.bind_tools(research_tools)
 
 
-def research_agent_node(state: MessagesState):
+async def research_agent_node(state: MessagesState):
     messages = [SystemMessage(content=RESEARCH_SYSTEM_PROMPT), *state["messages"]]
-    response = research_llm_with_tools.invoke(messages)
+    response = await research_llm_with_tools.ainvoke(messages)
     return {"messages": [response]}
 
 

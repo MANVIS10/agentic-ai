@@ -21,9 +21,9 @@ from app.llm import Route, supervisor_llm
 __all__ = ["Route", "supervisor_node", "route_from_supervisor"]
 
 
-def supervisor_node(state: dict):
+async def supervisor_node(state: dict):
     messages = [SystemMessage(content=SUPERVISOR_SYSTEM_PROMPT), *state["messages"]]
-    route: Route = supervisor_llm.invoke(messages)
+    route: Route = await supervisor_llm.ainvoke(messages)
     return {"next": route["next"], "retry_count": 0}
 
 

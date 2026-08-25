@@ -14,9 +14,9 @@ analysis_tools = [calculate]
 analysis_llm_with_tools = analysis_llm.bind_tools(analysis_tools)
 
 
-def analysis_agent_node(state: MessagesState):
+async def analysis_agent_node(state: MessagesState):
     messages = [SystemMessage(content=ANALYSIS_SYSTEM_PROMPT), *state["messages"]]
-    response = analysis_llm_with_tools.invoke(messages)
+    response = await analysis_llm_with_tools.ainvoke(messages)
     return {"messages": [response]}
 
 
