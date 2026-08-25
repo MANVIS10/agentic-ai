@@ -1,0 +1,35 @@
+.dropzone {
+  border: 1.5px dashed var(--color-border);
+  border-radius: var(--radius);
+  padding: 1.1rem 0.8rem;
+  text-align: center;
+  cursor: pointer;
+  background: var(--color-surface-alt);
+  transition: border-color 0.15s ease;
+}
+
+.dropzone:hover,
+.dropzoneActive {
+  border-color: var(--color-accent);
+}
+
+.label {
+  font-size: 0.82rem;
+  color: var(--color-text-muted);
+  margin: 0;
+}
+
+.browse {
+  color: var(--color-accent);
+  font-weight: 600;
+}
+
+.hint {
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+  margin: 0.3rem 0 0;
+}
+
+.input {
+  display: none;
+}

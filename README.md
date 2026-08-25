@@ -32,6 +32,7 @@ how the code evolved. Concepts build on each other — don't skip ahead.
 | 22 | `stage22_knowledge_agent_rag/` | Stage 21's exact app with the Knowledge Agent's tool replaced: `search_uploaded_documents` (pgvector search over `document_chunks`, in-process) instead of `search_knowledge_base` (the bundled `knowledge_base/*.md`) | A specialist's tool can be swapped out entirely without touching the supervisor, critic, or planner above it - `knowledge_node` only ever calls `knowledge_graph.invoke(...)` and never references a tool by name. Deliberately a *replacement*, not an addition: the bundled knowledge base is unreachable from this stage for normal queries, kept intact only in Stage 3-21 for historical compatibility |
 | 23 | `stage23_user_document_isolation/` | Stage 22's exact app with every uploaded document now owned by a caller-supplied `user_id`, filtered on both `POST /documents/search` and the Knowledge Agent's `search_uploaded_documents` tool, so one user's uploads can never be returned to another user | A tool bound to an LLM can read trusted, server-side context the model itself can never see or set - `search_uploaded_documents`'s new `user_id` argument is populated via `langgraph.prebuilt.InjectedState` straight from graph state, excluded from the schema the model sees, closing off the "tool argument the LLM could be tricked into changing" attack this stage exists to prevent |
 | 24 | `stage24_security_guardrails/` | Stage 23's exact app hardened against malicious/malformed input: bounded file reads, PDF-page/DOCX-zip-bomb/extraction-timeout caps, input length limits on every free-text field, a request-body-size middleware, an untrusted-content envelope + hardened prompt around the Knowledge Agent's tool output, a deterministic system-prompt-leak guard, and in-process per-route rate limiting | Untrusted retrieved content needs framing, not filtering - document text handed back by a tool is wrapped as explicit data the model reasons *about*, never instructions it *follows*, and a non-LLM output check catches a leak regardless of how it was phrased. No new capability, no authentication - purely narrowing what malicious input can make the existing pipeline do |
+| 25 | `stage25_react_ui/` | A React + TypeScript single-page app (document upload/list, chat, human approval, execution trace) talking to Stage 24's exact FastAPI contract, plus two additive backend changes: `GET /documents` and a `trace` field on `ThreadStatusResponse` | A frontend can reach a fully-built multi-agent backend by adding exactly two response shapes and one CORS middleware - no LangGraph node, edge, prompt, or tool changes. The trace panel surfaces data (routing decision, tool used, critic verdict) that already existed in memory and was only ever `print()`ed, never returned over HTTP |
 
 `stage4_web_fetch`, `stage5_pdf_fetch`, `stage6_planner`, and
 `stage7_human_in_loop` are follow-on tool stages built by request rather
@@ -197,6 +198,23 @@ adjacent concepts are taught together within a single stage folder:
   sliding-window rate limiter reusing Stage 19's `_thread_locks` idiom - no
   new dependency, no Redis, no authentication (see
   `.claude/spec/stage24_security_guardrails_spec.md`).
+- Stage 25 covers a React frontend - another deliberate extension past the
+  closed roadmap, and the first frontend in this project (every prior
+  stage was exercised through `curl`/`TestClient`/a terminal REPL). A
+  React + TypeScript single-page app (document upload/list, chat, human
+  approval, execution trace) talking to Stage 24's exact HTTP contract,
+  plus two confirmed additive backend changes living in a new
+  `stage25_react_ui/backend/main.py` (Stage 24's file, byte-identical
+  except for these): `GET /documents` (the `documents` table already had
+  every column a listing needed; it was just never `SELECT`ed by any
+  route) and a `trace` field on `ThreadStatusResponse`, populated only by
+  `POST /approve` (which specialist handled each subtask, which tool it
+  called, the critic's verdict - all already computed inside
+  `research_subtask()`/`research_node`/`knowledge_node`/`analysis_node`,
+  previously only `print()`ed). No LangGraph node, edge, prompt, or tool
+  changes; no authentication; no streaming - `/approve` stays one
+  blocking call, so the trace panel populates once, after the fact, never
+  as a live feed (see `.claude/spec/stage25_react_ui_spec.md`).
 
 ## Setup
 
@@ -242,3 +260,4 @@ python stage1_chatbot/main.py
 - [x] Stage 22 — Knowledge Agent RAG over uploaded documents (`stage22_knowledge_agent_rag`)
 - [x] Stage 23 — per-user document isolation (`stage23_user_document_isolation`)
 - [x] Stage 24 — security & production guardrails (`stage24_security_guardrails`)
+- [x] Stage 25 — React frontend (`stage25_react_ui`)

@@ -28,13 +28,13 @@
 | 22 | `stage22_knowledge_agent_rag/` | `search_uploaded_documents` (Knowledge Agent's tool, replacing `search_knowledge_base` in this stage's own copy) | Stage 21's exact app with the Knowledge Agent's tool swapped: it now answers from user-uploaded documents (`document_chunks` via `pgvector`, in-process) instead of the bundled `knowledge_base/*.md` — a replacement, not an addition, so the bundled knowledge base is unreachable from this stage for normal queries |
 | 23 | `stage23_user_document_isolation/` | `search_uploaded_documents` (Knowledge Agent's tool, now scoped per-user via `InjectedState`) | Stage 22's exact app with every uploaded document owned by a caller-supplied `user_id` (`documents.user_id`, migrated onto the existing shared table) and both retrieval paths — `POST /documents/search` and the Knowledge Agent's tool — filtered by it, so one user's uploads can never be returned to another user |
 | 24 | `stage24_security_guardrails/` | `search_uploaded_documents` (unchanged tool, now wrapped output) | Stage 23's exact app hardened against malicious/malformed input across eight areas — file/dangerous-file validation, API input limits, prompt-injection defense for retrieved document content, an output leak guard, integration with Stage 23's permission boundary, in-process per-route rate limiting, and safe error handling — no new capability, no authentication |
+| 25 | `stage25_react_ui/` | No new agent tool; two new/changed HTTP surfaces, `GET /documents` and a `trace` field on `ThreadStatusResponse` | Stage 24's exact app plus a React + TypeScript frontend (document upload/list, chat, human approval, execution trace) and the two additive backend changes the UI needs — no LangGraph node, edge, prompt, or tool changes, no authentication |
 
 ## Current tool
 
-None in progress — Stage 24 (`stage24_security_guardrails`) is the
-most recent addition, hardening the existing document upload/RAG/isolation
-pipeline against malicious or malformed input without adding any new
-capability.
+None in progress — Stage 25 (`stage25_react_ui`) is the most recent
+addition, giving the existing FastAPI backend a React frontend without
+adding any new agent capability.
 
 ## What I learned
 
@@ -670,20 +670,82 @@ capability.
   single shared `psycopg` connection - an external store would solve it
   properly but is exactly the "unnecessary infrastructure" this stage was
   asked to avoid.
+- **Stage 25 built as `stage25_react_ui`, duplicating Stage 24's `main.py`
+  into `stage25_react_ui/backend/main.py` rather than editing it in
+  place.** Same convention as every stage before it. A spec was written
+  and approved first (`.claude/spec/stage25_react_ui_spec.md`), then a
+  plan (`.claude/plans/stage25_react_ui_plan.md`), before any code was
+  written. `stage24_security_guardrails/` is untouched.
+- **Two confirmed additive backend changes, nothing else.** `GET
+  /documents` and a `trace` field on `ThreadStatusResponse` were the only
+  two of ten UI requirements the existing API couldn't satisfy as-is —
+  both are read-only/data-plumbing against data the graph already
+  computes (a `SELECT` on an existing table; values already sitting in
+  memory after a `print()` call), not new capabilities. Verified by
+  running Stage 24's own `test_security_guardrails.py` unmodified against
+  this stage's `app` — it still passes, confirming nothing existing was
+  weakened.
+- **Capturing tool names required touching three specialist node
+  functions, not just `research_subtask()`.** The plan's own initial read
+  ("the values are already sitting there unused") was correct for the
+  supervisor/critic decisions but not for tool names — `research_node`/
+  `knowledge_node`/`analysis_node` each discarded every message except
+  the final one (`result["messages"][-1]`) before `research_subtask()`
+  ever saw the result, so the `ToolMessage` entries proving a tool ran
+  never left those three functions. Fixed by extracting tool names
+  (`isinstance(m, ToolMessage)`, the same check Stage 16/22/23's tests
+  already used) inside each node and returning them as a new
+  `tools_used` field on `CriticState`.
+- **The trace panel populates once, after the fact — never a live feed.**
+  A direct consequence of the backend having no streaming transport
+  (unchanged since Stage 19): `POST /approve` is one blocking call that
+  runs the entire subtask loop before returning, so there's no
+  intermediate state to stream even if the transport existed. Building a
+  live feed would have meant adding real-time infrastructure this stage
+  was explicitly asked not to add — the UI's loading state during
+  `/approve` ("Researching… this can take a little while") is honest
+  about that instead of faking progress.
+- **Browser-based verification, not a new test framework.** No
+  Jest/Vitest/Playwright dependency (matching this project's "no
+  dependency where the standard tool suffices" ethos) — instead, the
+  actual running app was driven through a real Chrome browser (the
+  `claude-in-chrome` tool) against the real backend + real OpenAI:
+  upload, ask-a-document-question, approve (trace populated correctly,
+  citing the uploaded content), new-chat, reject (shown plainly, not as
+  an error), an unsupported-file-type client-side rejection, and an
+  identity switch (document list/chat/trace all reset, no cross-identity
+  leakage) all confirmed visually, with zero browser console errors.
+- **A frontend's own `.env` file can silently break a co-located Python
+  backend's `load_dotenv()`.** Caught during a final pre-commit sanity
+  re-run of `test_react_ui_backend.py`, which failed with a missing
+  `OPENAI_API_KEY` even though the repo-root `.env` was untouched and the
+  already-running backend process was fine. Cause: `python-dotenv`'s
+  `find_dotenv()` walks upward from the *calling script's own directory*
+  looking for a file literally named `.env` and stops at the first match
+  - `stage25_react_ui/.env` (created for Vite, per this stage's own setup
+  instructions) sat between `stage25_react_ui/backend/main.py` and the
+  real root `.env`, shadowing it for any fresh process. The already-
+  running server was unaffected only because it had loaded its env
+  *before* that file was created - a false sense of safety that a
+  same-process check wouldn't have caught. Fixed by using `.env.local`
+  for the frontend's Vite config instead of `.env` (Vite reads both;
+  `find_dotenv()`'s default only matches the exact name `.env`, so it
+  skips past it) and documenting this explicitly in the stage README so
+  the trap doesn't reappear silently on a future stage.
 
 ## Next tool
 
-None - Stage 24 (`stage24_security_guardrails`) is the most recent
-addition, hardening Stage 23's app against malicious/malformed input.
-Stage 17 (`stage17_final_multi_agent_system`) closed the
-project's original roadmap: it fulfills the spec's unnumbered final
-"Stage 14 — Final Multi-Agent Research Assistant"
-(`.claude/spec/spec_document.md`) item, and goes a step further than that
-diagram by also folding in planning and human-in-the-loop approval
-(Stage 7/8) around the supervisor+critic pipeline (Stage 16). Stages 18-24
-all extend past that closed roadmap - durable checkpointing, then an HTTP
-API, then document upload/ingestion, then embeddings + semantic search,
-then wiring that search into the Knowledge Agent, then isolating those
-documents per user, then hardening the whole pipeline with security
-guardrails - each requested as a deliberate next step rather than a spec
+None - Stage 25 (`stage25_react_ui`) is the most recent addition, giving
+Stage 24's app a browser-based UI. Stage 17
+(`stage17_final_multi_agent_system`) closed the project's original
+roadmap: it fulfills the spec's unnumbered final "Stage 14 — Final
+Multi-Agent Research Assistant" (`.claude/spec/spec_document.md`) item,
+and goes a step further than that diagram by also folding in planning and
+human-in-the-loop approval (Stage 7/8) around the supervisor+critic
+pipeline (Stage 16). Stages 18-25 all extend past that closed roadmap -
+durable checkpointing, then an HTTP API, then document upload/ingestion,
+then embeddings + semantic search, then wiring that search into the
+Knowledge Agent, then isolating those documents per user, then hardening
+the whole pipeline with security guardrails, then a React frontend on top
+of all of it - each requested as a deliberate next step rather than a spec
 item. No further stage is currently planned.

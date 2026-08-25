@@ -1,0 +1,22 @@
+.item {
+  padding: 0.6rem 0.7rem;
+  border-radius: var(--radius);
+  background: var(--color-surface-alt);
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.filename {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.meta {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
