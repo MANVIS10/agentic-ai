@@ -62,8 +62,8 @@ from app.config import (
     MAX_TOP_K,
     RATE_LIMIT_DETAIL,
     UNTRUSTED_CONTENT_PREFIX,
+    settings,
 )
-from app.db import get_connection
 from app.graphs.specialist import knowledge_node
 from app.main import app
 from app.security.leakguard import leaks_system_prompt
@@ -138,9 +138,16 @@ def search(client, query, user_id, **kwargs):
 
 
 def get_document_row_by_filename(filename):
-    return get_connection().execute(
-        "SELECT id FROM documents WHERE filename = %s", (filename,)
-    ).fetchone()
+    """Deliberately a throwaway, plain SYNC psycopg connection (like
+    conftest.py's pg_available fixture), not app.db's async pool - see
+    cleanup_documents's docstring below for why.
+    """
+    import psycopg
+
+    with psycopg.connect(settings.database_url) as conn:
+        return conn.execute(
+            "SELECT id FROM documents WHERE filename = %s", (filename,)
+        ).fetchone()
 
 
 def used_tool(result, tool_name):
@@ -151,11 +158,28 @@ def used_tool(result, tool_name):
 
 @pytest.fixture(autouse=True, scope="module")
 def cleanup_documents(client):
+    """Deliberately uses a throwaway, plain SYNC psycopg connection rather
+    than app.db's async pool.
+
+    This fixture runs on pytest-asyncio's own event loop, while `client`'s
+    ASGI lifespan (including app.db's pool) runs on TestClient's OWN
+    separate portal-thread loop (anyio's blocking portal always uses its
+    own background thread + loop, regardless of what's already running).
+    Touching the app's pool from here would bind or reuse it across two
+    different event loops, and app.db's pool - like a real server's, which
+    only ever runs on ONE loop for its whole process lifetime - is not
+    meant to survive that: the mismatch surfaces as "Task ... attached to a
+    different loop" whenever it's later closed. A one-off sync connection
+    sidesteps the whole question for this simple cleanup query.
+    """
+    import psycopg
+
     def _cleanup():
-        get_connection().execute(
-            "DELETE FROM documents WHERE filename = ANY(%s)",
-            (FIXTURE_FILENAMES + [INJECTION_FILENAME, REDIRECT_FILENAME],),
-        )
+        with psycopg.connect(settings.database_url) as conn:
+            conn.execute(
+                "DELETE FROM documents WHERE filename = ANY(%s)",
+                (FIXTURE_FILENAMES + [INJECTION_FILENAME, REDIRECT_FILENAME],),
+            )
 
     _cleanup()
     yield

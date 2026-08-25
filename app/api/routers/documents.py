@@ -14,10 +14,19 @@ wrapping BOTH the `INSERT INTO documents` row and the chunk inserts in one
 reproduces that by opening the transaction here, inserting the documents
 row, and calling `embed_and_store` inside the same block, with the
 try/except -> 500 conversion at this route layer.
+
+Phase 2 (async conversion): every handler is now `async def`, using the
+pooled `connection()` async context manager (app.db, Task 1) instead of
+the old single shared sync connection - each request now genuinely gets
+its own connection, so the upload transaction below is finally isolated
+from a concurrent request's writes. extract_text_with_timeout now raises
+`TimeoutError` (== `asyncio.TimeoutError` on this Python version) on
+timeout instead of `concurrent.futures.TimeoutError`, since it runs the
+CPU-bound extraction via `asyncio.to_thread` + `asyncio.wait_for` rather
+than a raw ThreadPoolExecutor.
 """
 
 import uuid
-from concurrent.futures import TimeoutError as FuturesTimeoutError
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from pgvector import Vector
@@ -45,7 +54,7 @@ from app.config import (
     UPLOAD_IP_RATE_LIMIT,
     UPLOAD_USER_RATE_LIMIT,
 )
-from app.db import get_connection
+from app.db import connection
 from app.ingestion.extract import extract_text_with_timeout, get_file_type
 from app.ingestion.store import chunk_text, embed_and_store
 from app.llm import embeddings
@@ -58,7 +67,7 @@ UNSUPPORTED_TYPE_DETAIL = "Unsupported file type. Allowed types: pdf, txt, docx"
 
 
 @router.get("/documents", response_model=DocumentListResponse)
-def list_documents(user_id: str, http_request: Request):
+async def list_documents(user_id: str, http_request: Request):
     """List documents belonging to user_id, most recently uploaded first
     (spec §3.1, confirmed addition). Same WHERE user_id = %s isolation
     filter Stage 23 already applies on every other retrieval path, same
@@ -70,13 +79,18 @@ def list_documents(user_id: str, http_request: Request):
     user_id = validate_text_field(user_id, "user_id")
 
     client_ip = http_request.client.host if http_request.client else "unknown"
-    enforce_rate_limits("list", user_id, client_ip, LIST_USER_RATE_LIMIT, LIST_IP_RATE_LIMIT)
+    await enforce_rate_limits(
+        "list", user_id, client_ip, LIST_USER_RATE_LIMIT, LIST_IP_RATE_LIMIT
+    )
 
-    rows = get_connection().execute(
-        "SELECT id, filename, file_type, chunk_count, uploaded_at "
-        "FROM documents WHERE user_id = %s ORDER BY uploaded_at DESC",
-        (user_id,),
-    ).fetchall()
+    async with connection() as conn:
+        rows = await (
+            await conn.execute(
+                "SELECT id, filename, file_type, chunk_count, uploaded_at "
+                "FROM documents WHERE user_id = %s ORDER BY uploaded_at DESC",
+                (user_id,),
+            )
+        ).fetchall()
     return DocumentListResponse(
         documents=[
             DocumentSummary(
@@ -92,7 +106,7 @@ def list_documents(user_id: str, http_request: Request):
 
 
 @router.post("/documents/upload", response_model=UploadResponse)
-def upload_document(
+async def upload_document(
     http_request: Request, file: UploadFile = File(...), user_id: str = Form(...)
 ):
     """Validate, extract, chunk, embed, and durably store an uploaded
@@ -109,7 +123,9 @@ def upload_document(
     user_id = validate_text_field(user_id, "user_id")
 
     client_ip = http_request.client.host if http_request.client else "unknown"
-    enforce_rate_limits("upload", user_id, client_ip, UPLOAD_USER_RATE_LIMIT, UPLOAD_IP_RATE_LIMIT)
+    await enforce_rate_limits(
+        "upload", user_id, client_ip, UPLOAD_USER_RATE_LIMIT, UPLOAD_IP_RATE_LIMIT
+    )
 
     filename = file.filename or ""
     if len(filename) > MAX_FILENAME_LENGTH:
@@ -122,10 +138,12 @@ def upload_document(
     # Bounded read, not read-then-check: reads at most one byte more than
     # the limit allows, so the server can never be made to buffer more
     # than MAX_FILE_SIZE_BYTES + 1 bytes regardless of what the client
-    # actually sends. Sync read, same as every other route here being a
-    # plain `def` - FastAPI/Starlette run sync routes in a threadpool
-    # automatically, so this blocking call doesn't need to be async.
-    file_bytes = file.file.read(MAX_FILE_SIZE_BYTES + 1)
+    # actually sends. `file.read(...)` (UploadFile's own async method, not
+    # the old `file.file.read(...)` on the raw sync file object) so a large
+    # upload that Starlette has spooled to disk gets read via its own
+    # threadpool-backed path instead of blocking this route's event loop
+    # directly.
+    file_bytes = await file.read(MAX_FILE_SIZE_BYTES + 1)
 
     if len(file_bytes) == 0:
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
@@ -137,8 +155,8 @@ def upload_document(
         )
 
     try:
-        text = extract_text_with_timeout(file_bytes, file_type)
-    except FuturesTimeoutError:
+        text = await extract_text_with_timeout(file_bytes, file_type)
+    except TimeoutError:
         print(
             f"[/documents/upload] Extraction timed out for {filename!r} "
             f"after {EXTRACTION_TIMEOUT_SECONDS}s"
@@ -156,21 +174,24 @@ def upload_document(
     chunks = chunk_text(text)
     document_id = uuid.uuid4()
 
-    conn = get_connection()
     try:
         # conn is autocommit; .transaction() still gives an explicit
         # BEGIN/COMMIT/ROLLBACK block on it, so a failure partway through
         # (embedding OR chunk insertion) rolls back the whole thing - no
         # orphaned documents row with a wrong chunk_count or a partial
         # chunk set. See this module's docstring for why the embedding
-        # step now runs inside this block rather than before it.
-        with conn.transaction():
-            conn.execute(
-                "INSERT INTO documents (id, filename, file_type, file_size_bytes, chunk_count, user_id) "
-                "VALUES (%s, %s, %s, %s, %s, %s)",
-                (document_id, filename, file_type, len(file_bytes), len(chunks), user_id),
-            )
-            embed_and_store(conn, document_id, chunks)
+        # step now runs inside this block rather than before it. A pooled
+        # connection (Task 1) makes this isolation genuine: a concurrent
+        # request's execute() can no longer land inside THIS transaction,
+        # the transaction-interleaving bug this phase fixes.
+        async with connection() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "INSERT INTO documents (id, filename, file_type, file_size_bytes, chunk_count, user_id) "
+                    "VALUES (%s, %s, %s, %s, %s, %s)",
+                    (document_id, filename, file_type, len(file_bytes), len(chunks), user_id),
+                )
+                await embed_and_store(conn, document_id, chunks)
     except Exception as exc:
         print(f"[/documents/upload] DB write failed for {filename!r}: {exc}")
         raise HTTPException(
@@ -189,7 +210,7 @@ def upload_document(
 
 
 @router.post("/documents/backfill-embeddings", response_model=BackfillResponse)
-def backfill_embeddings():
+async def backfill_embeddings():
     """Embed every document_chunks row with embedding IS NULL - rows
     written before pgvector existed, or leftovers from a previous partial
     backfill run. Deliberately NOT user-scoped and NOT rate-limited
@@ -204,24 +225,24 @@ def backfill_embeddings():
     autocommit connection, and a retry of this endpoint only ever touches
     rows still NULL - it's naturally resumable without any extra state.
     """
-    conn = get_connection()
-    rows = conn.execute(
-        "SELECT id, content FROM document_chunks WHERE embedding IS NULL"
-    ).fetchall()
+    async with connection() as conn:
+        rows = await (
+            await conn.execute("SELECT id, content FROM document_chunks WHERE embedding IS NULL")
+        ).fetchall()
 
-    embedded_count = 0
-    failed_count = 0
-    for chunk_id, content in rows:
-        try:
-            chunk_embedding = embeddings.embed_documents([content])[0]
-            conn.execute(
-                "UPDATE document_chunks SET embedding = %s WHERE id = %s",
-                (Vector(chunk_embedding), chunk_id),
-            )
-            embedded_count += 1
-        except Exception as exc:
-            print(f"[/documents/backfill-embeddings] Failed to embed chunk {chunk_id}: {exc}")
-            failed_count += 1
+        embedded_count = 0
+        failed_count = 0
+        for chunk_id, content in rows:
+            try:
+                chunk_embedding = (await embeddings.aembed_documents([content]))[0]
+                await conn.execute(
+                    "UPDATE document_chunks SET embedding = %s WHERE id = %s",
+                    (Vector(chunk_embedding), chunk_id),
+                )
+                embedded_count += 1
+            except Exception as exc:
+                print(f"[/documents/backfill-embeddings] Failed to embed chunk {chunk_id}: {exc}")
+                failed_count += 1
 
     return BackfillResponse(
         chunks_found=len(rows), embedded_count=embedded_count, failed_count=failed_count
@@ -229,7 +250,7 @@ def backfill_embeddings():
 
 
 @router.post("/documents/search", response_model=SearchResponse)
-def search_documents(request: SearchRequest, http_request: Request):
+async def search_documents(request: SearchRequest, http_request: Request):
     """Semantic similarity search over embedded document_chunks, scoped to
     the requesting user_id. Kept for direct testing/inspection of the
     search layer, independent of the Knowledge Agent's own tool
@@ -252,7 +273,9 @@ def search_documents(request: SearchRequest, http_request: Request):
     user_id = validate_text_field(request.user_id, "user_id")
 
     client_ip = http_request.client.host if http_request.client else "unknown"
-    enforce_rate_limits("search", user_id, client_ip, SEARCH_USER_RATE_LIMIT, SEARCH_IP_RATE_LIMIT)
+    await enforce_rate_limits(
+        "search", user_id, client_ip, SEARCH_USER_RATE_LIMIT, SEARCH_IP_RATE_LIMIT
+    )
 
     query_text = validate_text_field(
         request.query, "Query text", max_length=MAX_TEXT_INPUT_LENGTH
@@ -268,72 +291,73 @@ def search_documents(request: SearchRequest, http_request: Request):
             status_code=400, detail="similarity_threshold must be between 0 and 1"
         )
 
-    conn = get_connection()
+    async with connection() as conn:
+        document_uuid = None
+        if request.document_id is not None:
+            try:
+                document_uuid = uuid.UUID(request.document_id)
+            except ValueError:
+                raise HTTPException(
+                    status_code=404, detail="No document found for this document_id"
+                )
+            exists = await (
+                await conn.execute(
+                    "SELECT 1 FROM documents WHERE id = %s AND user_id = %s",
+                    (document_uuid, user_id),
+                )
+            ).fetchone()
+            if exists is None:
+                raise HTTPException(
+                    status_code=404, detail="No document found for this document_id"
+                )
 
-    document_uuid = None
-    if request.document_id is not None:
         try:
-            document_uuid = uuid.UUID(request.document_id)
-        except ValueError:
+            query_embedding = await embeddings.aembed_query(query_text)
+        except Exception as exc:
+            print(f"[/documents/search] Embedding query failed: {exc}")
             raise HTTPException(
-                status_code=404, detail="No document found for this document_id"
-            )
-        exists = conn.execute(
-            "SELECT 1 FROM documents WHERE id = %s AND user_id = %s",
-            (document_uuid, user_id),
-        ).fetchone()
-        if exists is None:
-            raise HTTPException(
-                status_code=404, detail="No document found for this document_id"
+                status_code=500,
+                detail="Something went wrong while processing this search. Please try again.",
             )
 
-    try:
-        query_embedding = embeddings.embed_query(query_text)
-    except Exception as exc:
-        print(f"[/documents/search] Embedding query failed: {exc}")
-        raise HTTPException(
-            status_code=500,
-            detail="Something went wrong while processing this search. Please try again.",
-        )
+        # A subquery, not a flat SELECT: Postgres won't let a WHERE clause
+        # reference a SELECT-list alias in the same query, but an OUTER query
+        # can reference an inner query's output column by name - so `similarity`
+        # is computed once in the inner SELECT and reused by both the outer
+        # WHERE (similarity_threshold) and ORDER BY, instead of recomputing the
+        # <=> operator a second time. Only ever appends pre-written static
+        # clause text based on which optional filters are present - every
+        # actual value still goes through the params list below, never
+        # string-interpolated. d.user_id = %s is unconditional (every search is
+        # scoped to a user), unlike the optional dc.document_id filter below it.
+        sql = """
+            SELECT * FROM (
+                SELECT dc.id AS chunk_id, dc.document_id, dc.chunk_index, dc.content,
+                       d.filename, 1 - (dc.embedding <=> %s) AS similarity
+                FROM document_chunks dc
+                JOIN documents d ON d.id = dc.document_id
+                WHERE dc.embedding IS NOT NULL
+                  AND d.user_id = %s
+        """
+        params = [Vector(query_embedding), user_id]
+        if document_uuid is not None:
+            sql += " AND dc.document_id = %s"
+            params.append(document_uuid)
+        sql += ") sub"
+        if request.similarity_threshold is not None:
+            sql += " WHERE similarity >= %s"
+            params.append(request.similarity_threshold)
+        sql += " ORDER BY similarity DESC LIMIT %s"
+        params.append(request.top_k)
 
-    # A subquery, not a flat SELECT: Postgres won't let a WHERE clause
-    # reference a SELECT-list alias in the same query, but an OUTER query
-    # can reference an inner query's output column by name - so `similarity`
-    # is computed once in the inner SELECT and reused by both the outer
-    # WHERE (similarity_threshold) and ORDER BY, instead of recomputing the
-    # <=> operator a second time. Only ever appends pre-written static
-    # clause text based on which optional filters are present - every
-    # actual value still goes through the params list below, never
-    # string-interpolated. d.user_id = %s is unconditional (every search is
-    # scoped to a user), unlike the optional dc.document_id filter below it.
-    sql = """
-        SELECT * FROM (
-            SELECT dc.id AS chunk_id, dc.document_id, dc.chunk_index, dc.content,
-                   d.filename, 1 - (dc.embedding <=> %s) AS similarity
-            FROM document_chunks dc
-            JOIN documents d ON d.id = dc.document_id
-            WHERE dc.embedding IS NOT NULL
-              AND d.user_id = %s
-    """
-    params = [Vector(query_embedding), user_id]
-    if document_uuid is not None:
-        sql += " AND dc.document_id = %s"
-        params.append(document_uuid)
-    sql += ") sub"
-    if request.similarity_threshold is not None:
-        sql += " WHERE similarity >= %s"
-        params.append(request.similarity_threshold)
-    sql += " ORDER BY similarity DESC LIMIT %s"
-    params.append(request.top_k)
-
-    try:
-        rows = conn.execute(sql, params).fetchall()
-    except Exception as exc:
-        print(f"[/documents/search] DB query failed: {exc}")
-        raise HTTPException(
-            status_code=500,
-            detail="Something went wrong while processing this search. Please try again.",
-        )
+        try:
+            rows = await (await conn.execute(sql, params)).fetchall()
+        except Exception as exc:
+            print(f"[/documents/search] DB query failed: {exc}")
+            raise HTTPException(
+                status_code=500,
+                detail="Something went wrong while processing this search. Please try again.",
+            )
 
     results = [
         SearchResult(

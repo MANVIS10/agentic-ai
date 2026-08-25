@@ -39,7 +39,7 @@ def set_graph(graph) -> None:
 
 
 @router.post("/chat", response_model=ThreadStatusResponse)
-def chat(request: ChatRequest, http_request: Request):
+async def chat(request: ChatRequest, http_request: Request):
     """Start (or restart) a research question on the given thread_id.
 
     New in this stage: `question` and `thread_id` are now validated
@@ -64,13 +64,17 @@ def chat(request: ChatRequest, http_request: Request):
     thread_id = validate_text_field(request.thread_id, "thread_id")
 
     client_ip = http_request.client.host if http_request.client else "unknown"
-    enforce_rate_limits("chat", user_id, client_ip, CHAT_USER_RATE_LIMIT, CHAT_IP_RATE_LIMIT)
+    await enforce_rate_limits(
+        "chat", user_id, client_ip, CHAT_USER_RATE_LIMIT, CHAT_IP_RATE_LIMIT
+    )
 
-    with thread_lock(thread_id):
+    async with thread_lock(thread_id):
         config = {"configurable": {"thread_id": thread_id}}
 
         try:
-            result = _graph.invoke({"question": question, "user_id": user_id}, config=config)
+            result = await _graph.ainvoke(
+                {"question": question, "user_id": user_id}, config=config
+            )
         except Exception as exc:
             print(f"[/chat] Error for thread_id={thread_id!r}: {exc}")
             raise HTTPException(
@@ -99,7 +103,7 @@ def chat(request: ChatRequest, http_request: Request):
         )
 
 
-def _require_pending_approval(thread_id: str):
+async def _require_pending_approval(thread_id: str):
     """Shared validation for /approve and /reject: confirm this thread_id
     actually exists and is currently paused at human_approval before
     calling Command(resume=...) on it. graph.invoke()'s return value alone
@@ -108,7 +112,7 @@ def _require_pending_approval(thread_id: str):
     interrupt.
     """
     config = {"configurable": {"thread_id": thread_id}}
-    state = _graph.get_state(config)
+    state = await _graph.aget_state(config)
 
     if not state.values:
         raise HTTPException(
@@ -122,7 +126,7 @@ def _require_pending_approval(thread_id: str):
 
 
 @router.post("/approve", response_model=ThreadStatusResponse)
-def approve(request: ApproveRequest):
+async def approve(request: ApproveRequest):
     """Resume a paused thread with an approval, running
     research_subtask (looped over every subtask) -> synthesize -> END.
 
@@ -137,11 +141,11 @@ def approve(request: ApproveRequest):
     check and the resume, and a duplicate simultaneous /approve is forced to
     wait and then see this call's result rather than racing it.
     """
-    with thread_lock(request.thread_id):
-        config = _require_pending_approval(request.thread_id)
+    async with thread_lock(request.thread_id):
+        config = await _require_pending_approval(request.thread_id)
 
         try:
-            result = _graph.invoke(Command(resume="y"), config=config)
+            result = await _graph.ainvoke(Command(resume="y"), config=config)
         except Exception as exc:
             print(f"[/approve] Error for thread_id={request.thread_id!r}: {exc}")
             raise HTTPException(
@@ -160,7 +164,7 @@ def approve(request: ApproveRequest):
 
 
 @router.post("/reject", response_model=ThreadStatusResponse)
-def reject(request: RejectRequest):
+async def reject(request: RejectRequest):
     """Resume a paused thread with a rejection. route_after_approval sends
     this straight to END - no special-case handling needed here, results
     stays [] and final_answer stays "" since no research ever ran.
@@ -169,11 +173,11 @@ def reject(request: RejectRequest):
     docstring. Held under this thread_id's lock for the same reason
     /approve is too.
     """
-    with thread_lock(request.thread_id):
-        config = _require_pending_approval(request.thread_id)
+    async with thread_lock(request.thread_id):
+        config = await _require_pending_approval(request.thread_id)
 
         try:
-            result = _graph.invoke(Command(resume="n"), config=config)
+            result = await _graph.ainvoke(Command(resume="n"), config=config)
         except Exception as exc:
             print(f"[/reject] Error for thread_id={request.thread_id!r}: {exc}")
             raise HTTPException(

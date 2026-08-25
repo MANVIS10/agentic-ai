@@ -36,7 +36,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.agents.prompts import KNOWLEDGE_SYSTEM_PROMPT
-from app.db import get_connection
+from app.config import settings
 from app.main import app
 
 DATABASE_URL_FRAGMENT = "postgres:postgres@"
@@ -72,11 +72,28 @@ def upload(client, filename, content_bytes, user_id):
 
 @pytest.fixture(autouse=True, scope="module")
 def cleanup_documents(client):
+    """Deliberately uses a throwaway, plain SYNC psycopg connection (like
+    conftest.py's pg_available fixture) rather than app.db's async pool.
+
+    This fixture runs on pytest-asyncio's own event loop, while `client`'s
+    ASGI lifespan (including app.db's pool) runs on TestClient's OWN
+    separate portal-thread loop (anyio's blocking portal always uses its
+    own background thread + loop, regardless of what's already running).
+    Touching the app's pool from here would bind or reuse it across two
+    different event loops, and app.db's pool - like a real server's, which
+    only ever runs on ONE loop for its whole process lifetime - is not
+    meant to survive that: the mismatch surfaces as "Task ... attached to a
+    different loop" whenever it's later closed. A one-off sync connection
+    sidesteps the whole question for this simple cleanup query.
+    """
+    import psycopg
+
     def _cleanup():
-        get_connection().execute(
-            "DELETE FROM documents WHERE filename = ANY(%s)",
-            ([FILENAME_A, FILENAME_B, KNOWLEDGE_FILENAME],),
-        )
+        with psycopg.connect(settings.database_url) as conn:
+            conn.execute(
+                "DELETE FROM documents WHERE filename = ANY(%s)",
+                ([FILENAME_A, FILENAME_B, KNOWLEDGE_FILENAME],),
+            )
 
     _cleanup()
     yield

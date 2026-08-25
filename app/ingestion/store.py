@@ -38,16 +38,23 @@ def chunk_text(text: str) -> list[str]:
     return document_splitter.split_text(text)
 
 
-def embed_and_store(conn, document_id, chunks: list[str]) -> int:
+async def embed_and_store(conn, document_id, chunks: list[str]) -> int:
     """Embed every chunk in one batched call (main.py:1542,
     "runs entirely BEFORE the transaction ... opens, so a failure here
     leaves nothing written"), then insert each into document_chunks using
     `conn` (main.py:1556-1572). Returns the number of chunks stored.
+
+    Phase 2 (async conversion): both the embedding call and every insert
+    are now awaited - `conn` is a pooled AsyncConnection (app.db.connection())
+    rather than the old single shared sync connection, and the caller
+    (the /documents/upload router) is expected to call this from within its
+    own `async with conn.transaction():` block, same atomicity contract as
+    before, just over async I/O.
     """
-    chunk_embeddings = embeddings.embed_documents(chunks)
+    chunk_embeddings = await embeddings.aembed_documents(chunks)
 
     for index, chunk in enumerate(chunks):
-        conn.execute(
+        await conn.execute(
             "INSERT INTO document_chunks (id, document_id, chunk_index, content, embedding) "
             "VALUES (%s, %s, %s, %s, %s)",
             (uuid.uuid4(), document_id, index, chunk, Vector(chunk_embeddings[index])),

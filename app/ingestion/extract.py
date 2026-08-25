@@ -7,9 +7,9 @@ file" rejections collapse into the SAME existing generic 422 message,
 deliberately, so none of them leaks which specific defense triggered.
 """
 
+import asyncio
 import io
 import zipfile
-from concurrent.futures import ThreadPoolExecutor
 
 from docx import Document as DocxDocument
 from pypdf import PdfReader
@@ -81,23 +81,37 @@ def extract_text(file_bytes: bytes, file_type: str) -> str:
     return file_bytes.decode("utf-8")
 
 
-def extract_text_with_timeout(file_bytes: bytes, file_type: str) -> str:
+async def extract_text_with_timeout(file_bytes: bytes, file_type: str) -> str:
     """Runs extract_text under a hard wall-clock bound
     (EXTRACTION_TIMEOUT_SECONDS), independent of the page-count/zip-bomb
     caps above - the general-purpose safety net for parser pathologies
     neither of those anticipates (e.g. a small, low-page-count PDF with a
     deeply nested object graph that's just slow to walk).
 
-    The worker thread is abandoned (not forcibly killed) on timeout -
-    Python has no safe primitive to terminate a running thread. This is an
-    accepted, documented limitation (see the stage README), not a
-    correctness issue: the request has already returned its error to the
-    caller either way, and executor.shutdown(wait=False) means this
-    function itself never blocks waiting for the abandoned thread.
+    Phase 2 (async conversion): extract_text is CPU-bound (parsing a PDF/
+    DOCX), so it must never run directly on the event loop - that would
+    block every other request in the process for the whole parse, not just
+    the caller. asyncio.to_thread(...) runs it on a worker thread (the
+    default executor), and asyncio.wait_for(...) applies the same
+    EXTRACTION_TIMEOUT_SECONDS bound the original ThreadPoolExecutor +
+    future.result(timeout=...) enforced - callers must keep catching a
+    timeout (now asyncio.TimeoutError, which is `TimeoutError` itself on
+    this Python version, rather than concurrent.futures.TimeoutError) and
+    mapping it to the same generic 422.
+
+    The worker thread is still abandoned (not forcibly killed) on timeout -
+    Python has no safe primitive to terminate a running thread, async or
+    not. This is the same accepted, documented limitation as the original
+    (see the stage README), not a correctness issue: the request has
+    already returned its error to the caller either way, and
+    asyncio.wait_for cancelling the wrapping task does not block THIS
+    function waiting for the abandoned thread to actually finish.
+
+    EXTRACTION_TIMEOUT_SECONDS and extract_text are read as free variables
+    from this module's own globals on every call (not captured at import
+    time), so tests can monkeypatch either name here directly.
     """
-    executor = ThreadPoolExecutor(max_workers=1)
-    future = executor.submit(extract_text, file_bytes, file_type)
-    try:
-        return future.result(timeout=EXTRACTION_TIMEOUT_SECONDS)
-    finally:
-        executor.shutdown(wait=False)
+    return await asyncio.wait_for(
+        asyncio.to_thread(extract_text, file_bytes, file_type),
+        timeout=EXTRACTION_TIMEOUT_SECONDS,
+    )

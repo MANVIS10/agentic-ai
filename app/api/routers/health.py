@@ -4,13 +4,13 @@
 from fastapi import APIRouter, HTTPException
 
 from app.api.schemas import HealthResponse
-from app.db import get_connection
+from app.db import connection
 
 router = APIRouter()
 
 
 @router.get("/health", response_model=HealthResponse)
-def health():
+async def health():
     """Verify the API process is up AND its Postgres dependency is
     reachable - a plain "the process is running" check would pass even if
     the database (the thing every other endpoint actually depends on) were
@@ -18,7 +18,8 @@ def health():
     be throttled.
     """
     try:
-        get_connection().execute("SELECT 1").fetchone()
+        async with connection() as conn:
+            await (await conn.execute("SELECT 1")).fetchone()
     except Exception as exc:
         print(f"[/health] Database unavailable: {exc}")
         raise HTTPException(status_code=503, detail="Database unavailable")

@@ -114,11 +114,27 @@ async def connection():
 
 
 async def close_pool() -> None:
-    """Closes the pool, for the lifespan shutdown handler."""
-    global _pool
+    """Closes the pool, for the lifespan shutdown handler.
+
+    Also resets `_checkpointer` to None, not just `_pool`. AsyncPostgresSaver
+    captures `asyncio.get_running_loop()` (and creates an `asyncio.Lock()`)
+    at CONSTRUCTION time (`get_checkpointer()`), so a checkpointer built
+    against one event loop is permanently bound to it. If a caller closes
+    the pool (e.g. one process/loop shutting down) but this module's
+    `_checkpointer` singleton were left in place, the NEXT `get_checkpointer()`
+    call - potentially on an entirely different event loop, as happens
+    between two independent test-suite TestClient instances, each running
+    its own ASGI lifespan on its own anyio blocking-portal thread/loop -
+    would silently hand back a checkpointer wired to a dead loop, which
+    hangs (rather than raising) the moment anything tries to use its
+    loop-bound lock. Resetting both together keeps "pool" and "checkpointer
+    built from that pool" from ever drifting out of sync.
+    """
+    global _pool, _checkpointer
     if _pool is not None:
         await _pool.close()
         _pool = None
+    _checkpointer = None
 
 
 def get_checkpointer() -> AsyncPostgresSaver:
