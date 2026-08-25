@@ -1,0 +1,42 @@
+.form {
+  display: flex;
+  gap: 0.6rem;
+  padding: 0.9rem 1.25rem;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.input {
+  flex: 1;
+  padding: 0.6rem 0.85rem;
+  border-radius: 0.5rem;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: 0.9rem;
+}
+
+.input:disabled {
+  opacity: 0.6;
+}
+
+.input:focus {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+.send {
+  padding: 0.6rem 1.1rem;
+  border-radius: 0.5rem;
+  border: none;
+  background: var(--color-accent);
+  color: var(--color-accent-contrast);
+  font-weight: 600;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.send:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

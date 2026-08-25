@@ -1,4 +1,4 @@
-"""Ported from stage25_react_ui/backend/test_react_ui_backend.py, converted
+"""Ported from stages/stage25_react_ui/backend/test_react_ui_backend.py, converted
 from its assert+print script style into pytest functions. Per this port's
 Task 8: only the imports and the function wrappers changed (`from main
 import (...)` -> `from app.main import app` / `from app.db import

@@ -6,7 +6,8 @@ from pathlib import Path
 
 import pytest
 
-OLD = Path("stage25_react_ui/backend/main.py")
+REPO_ROOT = Path(__file__).resolve().parent.parent
+OLD = REPO_ROOT / "stages" / "stage25_react_ui" / "backend" / "main.py"
 
 
 def _load_original():

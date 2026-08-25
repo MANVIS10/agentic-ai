@@ -11,7 +11,7 @@ def test_calculate_rejects_names_and_calls():
     # Deviation from the plan's literal assertion (`"error" in ... .lower()`):
     # calculate()'s error string is "Could not evaluate '...': <exc>" and
     # never contains the literal word "error" - verified identical against
-    # the original stage25_react_ui/backend/main.py implementation, so this
+    # the original stages/stage25_react_ui/backend/main.py implementation, so this
     # is a defect in the plan's test, not a porting bug. Checking for the
     # actual, always-present rejection prefix instead.
     assert "could not evaluate" in calculate.invoke({"expression": "__import__('os')"}).lower()

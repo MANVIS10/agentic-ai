@@ -5,7 +5,8 @@ from app.agents import prompts
 from app.config import LEAK_GUARD_MIN_SPAN
 from app.security.leakguard import leaks_system_prompt
 
-ORIGINAL_PATH = Path("stage25_react_ui/backend/main.py")
+REPO_ROOT = Path(__file__).resolve().parent.parent
+ORIGINAL_PATH = REPO_ROOT / "stages" / "stage25_react_ui" / "backend" / "main.py"
 _ORIGINAL_TREE = ast.parse(ORIGINAL_PATH.read_text(encoding="utf-8"))
 
 

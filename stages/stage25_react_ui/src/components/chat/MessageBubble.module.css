@@ -1,0 +1,41 @@
+.row {
+  display: flex;
+}
+
+.rowUser {
+  justify-content: flex-end;
+}
+
+.rowAssistant {
+  justify-content: flex-start;
+}
+
+.bubble {
+  max-width: 72%;
+  padding: 0.6rem 0.85rem;
+  border-radius: 0.9rem;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.user {
+  background: var(--color-accent);
+  color: var(--color-accent-contrast);
+  border-bottom-right-radius: 0.25rem;
+}
+
+.assistant {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+  border-bottom-left-radius: 0.25rem;
+}
+
+.rejected {
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+  border: 1px solid var(--color-warning);
+  border-bottom-left-radius: 0.25rem;
+  font-size: 0.85rem;
+}
