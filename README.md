@@ -31,6 +31,7 @@ how the code evolved. Concepts build on each other — don't skip ahead.
 | 21 | `stage21_semantic_search/` | Stage 20's exact app plus embeddings for every uploaded chunk (`pgvector`), a backfill endpoint for pre-existing chunks, and `POST /documents/search` for cosine-similarity search with configurable `top_k`/threshold/document scoping | Durable vector storage via Postgres + `pgvector`, instead of an in-memory store rebuilt every process start; the first schema *evolution* (`ALTER TABLE ... ADD COLUMN`) in this repo, not just first-time table creation; search only, no RAG/agent wiring yet |
 | 22 | `stage22_knowledge_agent_rag/` | Stage 21's exact app with the Knowledge Agent's tool replaced: `search_uploaded_documents` (pgvector search over `document_chunks`, in-process) instead of `search_knowledge_base` (the bundled `knowledge_base/*.md`) | A specialist's tool can be swapped out entirely without touching the supervisor, critic, or planner above it - `knowledge_node` only ever calls `knowledge_graph.invoke(...)` and never references a tool by name. Deliberately a *replacement*, not an addition: the bundled knowledge base is unreachable from this stage for normal queries, kept intact only in Stage 3-21 for historical compatibility |
 | 23 | `stage23_user_document_isolation/` | Stage 22's exact app with every uploaded document now owned by a caller-supplied `user_id`, filtered on both `POST /documents/search` and the Knowledge Agent's `search_uploaded_documents` tool, so one user's uploads can never be returned to another user | A tool bound to an LLM can read trusted, server-side context the model itself can never see or set - `search_uploaded_documents`'s new `user_id` argument is populated via `langgraph.prebuilt.InjectedState` straight from graph state, excluded from the schema the model sees, closing off the "tool argument the LLM could be tricked into changing" attack this stage exists to prevent |
+| 24 | `stage24_security_guardrails/` | Stage 23's exact app hardened against malicious/malformed input: bounded file reads, PDF-page/DOCX-zip-bomb/extraction-timeout caps, input length limits on every free-text field, a request-body-size middleware, an untrusted-content envelope + hardened prompt around the Knowledge Agent's tool output, a deterministic system-prompt-leak guard, and in-process per-route rate limiting | Untrusted retrieved content needs framing, not filtering - document text handed back by a tool is wrapped as explicit data the model reasons *about*, never instructions it *follows*, and a non-LLM output check catches a leak regardless of how it was phrased. No new capability, no authentication - purely narrowing what malicious input can make the existing pipeline do |
 
 `stage4_web_fetch`, `stage5_pdf_fetch`, `stage6_planner`, and
 `stage7_human_in_loop` are follow-on tool stages built by request rather
@@ -179,6 +180,23 @@ adjacent concepts are taught together within a single stage folder:
   invisible to the model, so an LLM can never be tricked into supplying
   someone else's `user_id` (see
   `.claude/spec/stage23_user_document_isolation_spec.md`).
+- Stage 24 covers security and production guardrails - another deliberate
+  extension past the closed roadmap. Stage 23's exact app, hardened rather
+  than extended: bounded reads and a filename length cap on
+  `POST /documents/upload`; a PDF page-count cap, a `zipfile`-based DOCX
+  zip-bomb guard, and a `ThreadPoolExecutor` extraction timeout, all
+  collapsing into the same generic `422` so no guard-specific detail leaks;
+  non-empty + max-length checks on every free-text field that had none
+  (`question`, `thread_id`, `query`) plus a `top_k` upper bound and a
+  `Content-Length`-based body-size middleware; `search_uploaded_documents`'s
+  output wrapped in an explicit untrusted-data envelope and
+  `KNOWLEDGE_SYSTEM_PROMPT` hardened to say so; a deterministic (non-LLM)
+  `_leaks_system_prompt` check that replaces the Knowledge Agent's final
+  answer if it ever recites a verbatim span of its own system prompt; and
+  an in-process, per-route (`chat`/`upload`/`search`), per-`user_id`-and-IP
+  sliding-window rate limiter reusing Stage 19's `_thread_locks` idiom - no
+  new dependency, no Redis, no authentication (see
+  `.claude/spec/stage24_security_guardrails_spec.md`).
 
 ## Setup
 
@@ -223,3 +241,4 @@ python stage1_chatbot/main.py
 - [x] Stage 21 — embeddings & semantic vector search (`stage21_semantic_search`)
 - [x] Stage 22 — Knowledge Agent RAG over uploaded documents (`stage22_knowledge_agent_rag`)
 - [x] Stage 23 — per-user document isolation (`stage23_user_document_isolation`)
+- [x] Stage 24 — security & production guardrails (`stage24_security_guardrails`)
