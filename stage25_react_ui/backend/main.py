@@ -102,6 +102,14 @@ DATABASE_URL = os.getenv(
     "DATABASE_URL", "postgresql://postgres:postgres@localhost:5433/postgres?sslmode=disable"
 )
 
+# Comma-separated list of extra allowed origins for deployment (e.g. a
+# deployed frontend's URL), on top of the local Vite dev server below.
+ALLOWED_ORIGINS = ["http://localhost:5173"] + [
+    origin.strip()
+    for origin in os.getenv("ALLOWED_ORIGINS", "").split(",")
+    if origin.strip()
+]
+
 MAX_RETRIES = 1  # at most one retry per subtask - two specialist attempts total
 
 llm = ChatOpenAI(model="gpt-4o-mini")
@@ -1215,7 +1223,7 @@ app = FastAPI(
 # lock runs.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=False,
     allow_methods=["GET", "POST"],
     allow_headers=["Content-Type"],
