@@ -1,8 +1,18 @@
 """The Knowledge Agent's uploaded-document search tool, moved from
 stage25_react_ui/backend/main.py (lines 214-259). `pg_conn` (a bare
-module-level connection in the original) becomes `get_connection()`;
-`embeddings` and the untrusted-content envelope constants move to their
-respective modules but keep their exact values and behavior.
+module-level connection in the original) becomes the pooled `connection()`
+context manager; `embeddings` and the untrusted-content envelope constants
+move to their respective modules but keep their exact values and behavior.
+
+Phase 2 (async conversion): `search_uploaded_documents` is now `async def`,
+using `await embeddings.aembed_query(query)` and `async with connection()
+as conn` over the pool from Task 1. Defining the tool function itself as
+`async def` (rather than a sync function with a separate `coroutine=`
+argument to `@tool`) is what makes LangChain populate `.coroutine`, so
+`ToolNode.ainvoke()` calls this directly instead of falling back to running
+the sync path on a worker thread. The SQL, the KNOWLEDGE_TOOL_K limit, the
+untrusted-content envelope, and the user_id filter are all unchanged - only
+the I/O calls became awaited.
 
 search_uploaded_documents uses InjectedState("user_id") - a string key -
 so it does not import KnowledgeState, matching the original.
@@ -15,12 +25,12 @@ from langgraph.prebuilt import InjectedState
 from pgvector import Vector
 
 from app.config import KNOWLEDGE_TOOL_K, UNTRUSTED_CONTENT_PREFIX, UNTRUSTED_CONTENT_SUFFIX
-from app.db import get_connection
+from app.db import connection
 from app.llm import embeddings
 
 
 @tool
-def search_uploaded_documents(
+async def search_uploaded_documents(
     query: str,
     user_id: Annotated[str, InjectedState("user_id")],
 ) -> str:
@@ -31,24 +41,27 @@ def search_uploaded_documents(
     user has uploaded. There is no other knowledge source available.
     """
     try:
-        query_embedding = embeddings.embed_query(query)
+        query_embedding = await embeddings.aembed_query(query)
     except Exception as exc:
         print(f"[search_uploaded_documents] Embedding error: {exc}")
         return "Something went wrong while searching uploaded documents."
 
     try:
-        rows = get_connection().execute(
-            """
-            SELECT dc.content, d.filename
-            FROM document_chunks dc
-            JOIN documents d ON d.id = dc.document_id
-            WHERE dc.embedding IS NOT NULL
-              AND d.user_id = %s
-            ORDER BY dc.embedding <=> %s
-            LIMIT %s
-            """,
-            (user_id, Vector(query_embedding), KNOWLEDGE_TOOL_K),
-        ).fetchall()
+        async with connection() as conn:
+            rows = await (
+                await conn.execute(
+                    """
+                    SELECT dc.content, d.filename
+                    FROM document_chunks dc
+                    JOIN documents d ON d.id = dc.document_id
+                    WHERE dc.embedding IS NOT NULL
+                      AND d.user_id = %s
+                    ORDER BY dc.embedding <=> %s
+                    LIMIT %s
+                    """,
+                    (user_id, Vector(query_embedding), KNOWLEDGE_TOOL_K),
+                )
+            ).fetchall()
     except Exception as exc:
         print(f"[search_uploaded_documents] DB error: {exc}")
         return "Something went wrong while searching uploaded documents."

@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 from app.tools.calculator import calculate
 
@@ -32,3 +34,42 @@ def test_document_search_tool_hides_user_id_from_the_llm():
     from app.tools.document_search import search_uploaded_documents
 
     assert "user_id" not in search_uploaded_documents.args
+
+
+def test_document_search_is_awaitable():
+    from app.tools.document_search import search_uploaded_documents
+
+    assert search_uploaded_documents.coroutine is not None, (
+        "tool must expose an async implementation so ToolNode.ainvoke does not "
+        "fall back to running it on a worker thread"
+    )
+
+
+def test_document_search_still_hides_user_id():
+    """Regression guard: the Stage 23 isolation property must survive the
+    async rewrite."""
+    from app.tools.document_search import search_uploaded_documents
+
+    assert "user_id" not in search_uploaded_documents.args
+
+
+def test_web_search_is_awaitable():
+    """DuckDuckGoSearchRun is a synchronous library (ddgs makes a blocking
+    HTTP call) with no native async support.
+
+    Deviation from a plain `iscoroutinefunction(search_web._arun)` check:
+    BaseTool already defines a default async `_arun` that runs `_run` in an
+    executor, so that assertion would pass even with zero changes to this
+    module and never actually exercise the intended
+    `await asyncio.to_thread(...)` wrapping. Asserting `_arun` is defined on
+    search_web's OWN class (not just inherited from BaseTool) is what
+    actually distinguishes "this module wraps the blocking call itself" from
+    "nothing changed here".
+    """
+    from app.tools.web_search import search_web
+
+    assert "_arun" in type(search_web).__dict__, (
+        "search_web must define its own _arun that explicitly wraps the "
+        "blocking DuckDuckGo call in asyncio.to_thread"
+    )
+    assert asyncio.iscoroutinefunction(search_web._arun)
