@@ -114,6 +114,11 @@ def research_subtask(state: PlannerState):
         "subtask": subtask,
         "specialist": result["next"],
         "tools_used": result.get("tools_used", []),
+        # Always "completed", even for a subtask whose critic verdict is
+        # "retry" that then exhausted MAX_RETRIES and fell through - this
+        # field doesn't currently distinguish that from a clean pass. A
+        # known limitation carried forward unfixed (Phase 3 territory, per
+        # this port's constraints), unchanged from the original.
         "status": "completed",
         "verdict": result["verdict"],
         "retry_count": result["retry_count"],
