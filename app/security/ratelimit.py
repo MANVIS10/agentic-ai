@@ -17,6 +17,14 @@ coarser backstop, since user_id is self-asserted per Stage 23 - a caller
 could otherwise defeat a per-user_id-only limit by rotating the claimed
 user_id).
 
+Phase 2 (async conversion): `enforce_rate_limits` becomes `async def`,
+guarded by `asyncio.Lock` instead of `threading.Lock`, for the same reason
+security/locks.py's thread_lock made the same swap - a blocking
+`threading.Lock` inside an async route would stall the whole event loop,
+not just one thread. The check itself is still pure in-memory bookkeeping
+(no actual I/O to await), so this is about not blocking the loop while
+holding the lock, not about any operation here being slow.
+
 Known, accepted limitation carried forward unfixed (Phase 3 territory, per
 this plan's constraints): `_rate_limit_state`'s key space is unbounded. A
 caller cycling through many distinct fake user_id/IP values grows this
@@ -24,7 +32,7 @@ dict indefinitely, since nothing ever evicts a key. A production
 deployment would want an external, TTL-evicting store (Redis) for this.
 """
 
-import threading
+import asyncio
 import time
 
 from fastapi import HTTPException
@@ -32,10 +40,10 @@ from fastapi import HTTPException
 from app.config import RATE_LIMIT_DETAIL
 
 _rate_limit_state: dict[str, list[float]] = {}
-_rate_limit_guard = threading.Lock()
+_rate_limit_guard = asyncio.Lock()
 
 
-def _enforce_rate_limit(key: str, max_requests: int, window_seconds: float) -> None:
+async def _enforce_rate_limit(key: str, max_requests: int, window_seconds: float) -> None:
     """Raises 429 if `key` has already made `max_requests` calls within the
     last `window_seconds`; otherwise records this call and allows it
     through. `key` is namespaced by the caller (e.g. "user:alice",
@@ -43,7 +51,7 @@ def _enforce_rate_limit(key: str, max_requests: int, window_seconds: float) -> N
     independent limiter dimensions without them colliding.
     """
     now = time.monotonic()
-    with _rate_limit_guard:
+    async with _rate_limit_guard:
         timestamps = [t for t in _rate_limit_state.get(key, []) if now - t < window_seconds]
         if len(timestamps) >= max_requests:
             raise HTTPException(status_code=429, detail=RATE_LIMIT_DETAIL)
@@ -51,7 +59,7 @@ def _enforce_rate_limit(key: str, max_requests: int, window_seconds: float) -> N
         _rate_limit_state[key] = timestamps
 
 
-def enforce_rate_limits(
+async def enforce_rate_limits(
     scope: str,
     user_id: str,
     client_ip: str,
@@ -71,5 +79,5 @@ def enforce_rate_limits(
     429 attributable to its own history even though, internally, either
     dimension could have triggered it.
     """
-    _enforce_rate_limit(f"user:{scope}:{user_id}", *user_limit)
-    _enforce_rate_limit(f"ip:{scope}:{client_ip}", *ip_limit)
+    await _enforce_rate_limit(f"user:{scope}:{user_id}", *user_limit)
+    await _enforce_rate_limit(f"ip:{scope}:{client_ip}", *ip_limit)
