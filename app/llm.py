@@ -15,6 +15,18 @@ modules are downstream of llm, so the types must live here (or lower) and
 agents/supervisor.py, agents/critic.py import them from app.llm - moving
 the shared symbol downward, per this plan's cycle-breaking rule, rather
 than an agents -> llm -> agents cycle.
+
+Phase 2 (async conversion, Task 6): every ChatOpenAI(...) now passes an
+explicit request_timeout and max_retries (app.config's
+llm_request_timeout_seconds/llm_max_retries). Previously no LLM call had a
+timeout at all - a hung upstream call held a request open indefinitely,
+and (per app/security/locks.py) its per-thread lock along with it, for up
+to THREAD_LOCK_TIMEOUT_SECONDS. This is applied to all six instances,
+including the two that get wrapped in .with_structured_output(...) below
+(supervisor_llm, critic_llm) - the timeout/retry settings belong to the
+underlying ChatOpenAI client itself, so they must be passed at
+construction, before .with_structured_output(...) wraps it in a
+different Runnable type that doesn't expose them directly.
 """
 
 from typing import Literal
@@ -24,15 +36,31 @@ from typing_extensions import TypedDict
 
 from app.config import settings
 
-chat_llm = ChatOpenAI(model=settings.openai_chat_model)
+chat_llm = ChatOpenAI(
+    model=settings.openai_chat_model,
+    request_timeout=settings.llm_request_timeout_seconds,
+    max_retries=settings.llm_max_retries,
+)
 
-research_llm = ChatOpenAI(model=settings.openai_chat_model)
+research_llm = ChatOpenAI(
+    model=settings.openai_chat_model,
+    request_timeout=settings.llm_request_timeout_seconds,
+    max_retries=settings.llm_max_retries,
+)
 
 embeddings = OpenAIEmbeddings(model=settings.openai_embedding_model)
 
-knowledge_llm = ChatOpenAI(model=settings.openai_chat_model)
+knowledge_llm = ChatOpenAI(
+    model=settings.openai_chat_model,
+    request_timeout=settings.llm_request_timeout_seconds,
+    max_retries=settings.llm_max_retries,
+)
 
-analysis_llm = ChatOpenAI(model=settings.openai_chat_model)
+analysis_llm = ChatOpenAI(
+    model=settings.openai_chat_model,
+    request_timeout=settings.llm_request_timeout_seconds,
+    max_retries=settings.llm_max_retries,
+)
 
 
 class Route(TypedDict):
@@ -46,9 +74,11 @@ class Route(TypedDict):
 # echoes back the JSON SCHEMA itself instead of an instance of it, which
 # crashes a dict lookup with a KeyError. function_calling reliably returns
 # just the typed fields.
-supervisor_llm = ChatOpenAI(model=settings.openai_chat_model).with_structured_output(
-    Route, method="function_calling"
-)
+supervisor_llm = ChatOpenAI(
+    model=settings.openai_chat_model,
+    request_timeout=settings.llm_request_timeout_seconds,
+    max_retries=settings.llm_max_retries,
+).with_structured_output(Route, method="function_calling")
 
 
 class Review(TypedDict):
@@ -58,6 +88,8 @@ class Review(TypedDict):
     feedback: str
 
 
-critic_llm = ChatOpenAI(model=settings.openai_chat_model).with_structured_output(
-    Review, method="function_calling"
-)
+critic_llm = ChatOpenAI(
+    model=settings.openai_chat_model,
+    request_timeout=settings.llm_request_timeout_seconds,
+    max_retries=settings.llm_max_retries,
+).with_structured_output(Review, method="function_calling")

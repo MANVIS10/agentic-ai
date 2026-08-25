@@ -22,6 +22,12 @@ class Settings(BaseSettings):
     allowed_origins_env: str = Field(default="", alias="ALLOWED_ORIGINS")
     openai_chat_model: str = "gpt-4o-mini"
     openai_embedding_model: str = "text-embedding-3-small"
+    # Phase 2 (async conversion, Task 6): no LLM call had a timeout before
+    # this - a hung upstream call held a request, and its per-thread lock
+    # (app/security/locks.py, up to THREAD_LOCK_TIMEOUT_SECONDS), forever.
+    # Applied to every ChatOpenAI(...) in app/llm.py.
+    llm_request_timeout_seconds: float = 60.0
+    llm_max_retries: int = 2
 
     @property
     def allowed_origins(self) -> list[str]:
