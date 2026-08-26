@@ -38,7 +38,7 @@ export function useChat(userId: string | null) {
       setError(null);
       setPhase("planning");
       try {
-        const response = await postChat({ question, thread_id: threadId, user_id: userId });
+        const response = await postChat({ question, thread_id: threadId });
         setTurns((prev) => [
           ...prev,
           {

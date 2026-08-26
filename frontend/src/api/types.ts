@@ -1,9 +1,11 @@
 // Mirrors stage25_react_ui/backend/main.py's Pydantic models field-for-field.
 
+// user_id is not sent: every route derives it from the bearer token. The
+// backend still accepts and ignores the field (its OpenAPI schema is frozen
+// by tests/test_schema_parity.py), but sending it would imply it matters.
 export interface ChatRequest {
   question: string;
   thread_id: string;
-  user_id: string;
 }
 
 export interface ApproveRequest {

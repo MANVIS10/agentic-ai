@@ -14,7 +14,7 @@ export function useDocuments(userId: string | null) {
     setLoading(true);
     setError(null);
     try {
-      const response = await listDocuments(userId);
+      const response = await listDocuments();
       setDocuments(response.documents);
     } catch (err) {
       setError((err as ApiError).detail);
@@ -35,7 +35,7 @@ export function useDocuments(userId: string | null) {
       setUploading(true);
       setUploadError(null);
       try {
-        await uploadDocument(file, userId);
+        await uploadDocument(file);
         await refresh();
       } catch (err) {
         setUploadError((err as ApiError).detail);
