@@ -14,6 +14,13 @@ export interface RejectRequest {
   thread_id: string;
 }
 
+// Mirrors the backend's TokenResponse (app/api/routers/auth.py).
+export interface TokenResponse {
+  access_token: string;
+  token_type: "bearer";
+  expires_in: number;
+}
+
 // "unknown" when the dispatch itself raised, so no specialist ever ran.
 export type Specialist = "research" | "knowledge" | "analysis" | "unknown";
 export type Verdict = "pass" | "retry";
