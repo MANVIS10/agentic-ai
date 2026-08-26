@@ -12,7 +12,13 @@
 ![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
 ![Postgres](https://img.shields.io/badge/Postgres-pgvector-4169E1?logo=postgresql&logoColor=white)
 
-<img src="docs/images/app-screenshot.jpg" alt="The research assistant: document upload, conversation, and execution trace" width="900">
+<img src="docs/images/approval-gate.jpg" alt="The graph paused at the approval gate, showing the three subtasks it plans to research" width="900">
+
+<sub>The graph plans, then <b>stops</b> — waiting on a human before any research runs.</sub>
+
+<img src="docs/images/execution-trace.jpg" alt="A finished run: the synthesized answer beside a trace of each subtask, its specialist, its tool, and the critic's verdict" width="900">
+
+<sub>Approved: each subtask shows which specialist handled it, which tool it called, and how the critic ruled.</sub>
 
 </div>
 
