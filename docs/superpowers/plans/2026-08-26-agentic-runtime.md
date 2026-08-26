@@ -155,7 +155,99 @@ git commit -am "Degrade a failing subtask instead of losing the whole run"
 
 ---
 
-## Task 3: Parallel subtask fan-out
+## Task 3: ReAct executor loop (replaces the planned fan-out)
+
+**Decision, 2026-08-26:** the user chose a ReAct loop over the parallel `Send`
+fan-out originally specified here. The fan-out design is preserved below the
+new task for reference, since it remains the right answer if latency ever
+matters more than adaptivity.
+
+**Why this shape and not a pure ReAct agent.** A pure ReAct loop has no plan to
+approve — the plan emerges as it goes — which would break `/chat` (returns the
+pending plan), `/approve`, `/reject`, and the frontend's approval panel, all of
+which Rule 1 forbids changing. So approval stays exactly as it is, and the
+ReAct loop replaces only what happens *after* approval: the fixed
+`current_index` walk becomes an adaptive reason → act → observe loop, seeded
+with the approved subtasks as its initial agenda.
+
+**What this buys:** the executor can finish early once it has enough, or add a
+follow-up subtask it discovers mid-run — neither of which a fixed script can
+do.
+
+**What it costs, accepted deliberately:** no parallelism (reason→act→observe is
+sequential), and an unbounded loop can spiral on an ambiguous question, so a
+hard step budget is mandatory, not optional.
+
+**Files:** Modify `app/graphs/planner.py`, `app/config.py`; Test: `tests/test_react_loop.py`
+
+- [ ] **Step 1: Write the failing tests**
+
+```python
+# tests/test_react_loop.py
+from app.graphs.planner import decide_next_action, ReactDecision
+
+
+def test_finishes_when_the_agenda_is_empty():
+    state = {"agenda": [], "results": [], "step_count": 0, "question": "q"}
+    assert decide_next_action(state).action == "finish"
+
+
+def test_step_budget_is_hard():
+    """An adaptive loop that can add work to its own agenda must have a
+    ceiling, or an ambiguous question spirals until the request times out."""
+    from app.config import MAX_REACT_STEPS
+
+    state = {"agenda": ["still", "more", "work"], "results": [],
+             "step_count": MAX_REACT_STEPS, "question": "q"}
+    decision = decide_next_action(state)
+    assert decision.action == "finish"
+    assert decision.reason == "step_budget_exhausted"
+
+
+def test_continues_while_work_remains_and_budget_allows():
+    state = {"agenda": ["a"], "results": [], "step_count": 0, "question": "q"}
+    d = decide_next_action(state)
+    assert d.action == "research" and d.subtask == "a"
+```
+
+- [ ] **Step 2: Run to verify they fail**
+
+- [ ] **Step 3: Implement**
+
+- Add `agenda: list[str]` and `step_count: int` to `PlannerState`; `plan()` seeds
+  `agenda` with the subtasks it produced and `step_count` to 0.
+- `decide_next_action(state) -> ReactDecision` is a **pure function** (no LLM),
+  deciding continue-vs-finish from the agenda and the budget. Keeping the
+  control-flow decision deterministic and separately testable is what makes the
+  loop auditable; the *reasoning* about results still uses the LLM.
+- `react_step` node: pops the next agenda item, dispatches it to
+  `supervisor_critic_graph.ainvoke` exactly as `research_subtask` does today
+  (so Task 2's error handling and Task 1's trace entry both still apply),
+  appends the result, increments `step_count`.
+- `reflect` node: after each step, an LLM call decides whether the accumulated
+  results answer the question. It may return a follow-up subtask to append to
+  the agenda, or signal done. It must never remove existing agenda items.
+- Conditional edge from `reflect` back to `react_step` or on to `synthesize`,
+  routed by `decide_next_action`.
+- `MAX_REACT_STEPS: int = 6` in config — roughly double a typical 3-subtask
+  plan, leaving room for follow-ups without letting the loop run away.
+
+The trace must record follow-up subtasks the agent added itself, distinguishably
+from the ones the human approved — otherwise the approval gate is silently
+meaningless, since the agent could research anything it liked after approval.
+Add `"origin": "approved" | "agent"` to the trace entry.
+
+- [ ] **Step 4: Run to verify they pass**, then the full suite — `test_app_backend.py`'s end-to-end approve flow is the real regression check.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git commit -am "Replace the fixed subtask walk with a bounded ReAct executor loop"
+```
+
+---
+
+## Task 3 (superseded): Parallel subtask fan-out
 
 `has_more_subtasks` walks `current_index + 1` strictly sequentially. Three subtasks that share nothing run one after another — the biggest available latency win, and the reason Phase 2 exists.
 
