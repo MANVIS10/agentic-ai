@@ -20,13 +20,16 @@ from app.api.routers import chat as chat_router
 from app.api.routers.chat import router as chat_routes
 from app.api.routers.documents import router as documents_routes
 from app.api.routers.health import router as health_routes
-from app.config import settings
+from app.config import settings, validate_for_startup
 from app.db import close_pool, get_checkpointer, init_schema
 from app.graphs.planner import build_graph
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Before any I/O: a misconfigured process should die here, loudly, rather
+    # than accept traffic and fail one request at a time.
+    validate_for_startup()
     await init_schema()
     graph = build_graph(get_checkpointer())
     chat_router.set_graph(graph)
