@@ -84,6 +84,10 @@ npm run dev
 The UI expects the backend at `http://localhost:8000` — see
 `frontend/.env.example`.
 
+Signing in asks for a name and an access phrase. The phrase is the backend's
+`AUTH_SIGNUP_SECRET`; when that variable is unset the backend issues tokens
+without checking it, so any non-empty phrase works locally.
+
 ## API
 
 | Method | Path | Purpose |
@@ -116,9 +120,11 @@ pytest tests/ --ignore=tests/test_app_backend.py
 
 Stated plainly rather than left to be discovered:
 
-- **No authentication.** `user_id` is self-asserted by the caller. Per-user
-  document isolation is enforced on every retrieval path, but there is no
-  identity behind it — anyone who knows a `user_id` can read those documents.
+- **Shared-secret authentication, not an identity provider.** Callers exchange
+  one deployment-wide access phrase for an HMAC-signed bearer token, and every
+  user-scoped route derives its `user_id` from that token. Anyone holding the
+  phrase can obtain a token for any `user_id`, so this establishes that a
+  caller authenticated — not that they are who they claim.
 - **No streaming.** `/chat` and `/approve` are single blocking calls, so the
   trace panel populates once at the end rather than as a live feed.
 - **Rate limiting is in-process.** An unbounded dict with no TTL eviction, not
