@@ -31,13 +31,16 @@ class SubtaskTrace(BaseModel):
     """
 
     subtask: str
-    specialist: Literal["research", "knowledge", "analysis"]
+    # "unknown" when the dispatch itself raised - no specialist ever ran.
+    # An enum member rather than null: the field stays a plain string, so a
+    # client indexing by it gets a miss it can default, not a type error.
+    specialist: Literal["research", "knowledge", "analysis", "unknown"]
     tools_used: list[str]
     # Widened in Phase 3A (was Literal["completed"]). "needs_review" means
     # the critic never accepted the answer - the retry budget ran out and
     # the last attempt was returned anyway. Additive: no field removed or
     # renamed, and a passing subtask still serializes exactly as before.
-    status: Literal["completed", "needs_review"]
+    status: Literal["completed", "needs_review", "failed"]
     verdict: Literal["pass", "retry"]
     retry_count: int
 

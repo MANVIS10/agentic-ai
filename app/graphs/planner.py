@@ -82,6 +82,29 @@ def route_after_approval(state: PlannerState) -> str:
     return has_more_subtasks(state)
 
 
+# Stands in for a subtask whose research raised. Deliberately generic and
+# free of any exception detail: it reaches the caller both in the synthesis
+# prompt and, via results, in the API response.
+SUBTASK_FAILED_PLACEHOLDER = "Could not complete this subtask due to an internal error."
+
+
+def build_failed_trace_entry(subtask: str) -> dict:
+    """Trace record for a subtask whose research raised.
+
+    Mirrors build_trace_entry's shape so the UI needs no special case, but
+    carries no specialist or tool attribution - when the dispatch itself
+    raised, we genuinely do not know which specialist would have handled it.
+    """
+    return {
+        "subtask": subtask,
+        "specialist": "unknown",
+        "tools_used": [],
+        "status": "failed",
+        "verdict": "retry",
+        "retry_count": 0,
+    }
+
+
 def build_trace_entry(subtask: str, result: dict) -> dict:
     """One subtask's trace record (Stage 25 spec §3.2), derived from the
     inner supervisor+critic graph's final state.
@@ -122,9 +145,27 @@ async def research_subtask(state: PlannerState):
     subtask = state["subtasks"][state["current_index"]]
     print(f"\nResearching: {subtask}")
 
-    result = await supervisor_critic_graph.ainvoke(
-        {"messages": [{"role": "user", "content": subtask}], "user_id": state["user_id"]}
-    )
+    # A specialist or tool raising must not abort the run. Before this, the
+    # exception propagated out of the outer graph to the 500 handler and
+    # every already-completed subtask's work was discarded - despite the
+    # checkpointer - so one flaky web search destroyed a three-subtask run.
+    try:
+        result = await supervisor_critic_graph.ainvoke(
+            {"messages": [{"role": "user", "content": subtask}], "user_id": state["user_id"]}
+        )
+    except Exception as exc:
+        # Logged server-side only. exc's text can carry a connection string
+        # or a prompt fragment, so it must never reach the caller - the same
+        # rule the HTTP layer's unhandled_exception_handler already applies.
+        print(f"[research_subtask] {type(exc).__name__} on subtask {subtask!r}: {exc}")
+        return {
+            "results": state["results"] + [SUBTASK_FAILED_PLACEHOLDER],
+            "trace": state["trace"] + [build_failed_trace_entry(subtask)],
+            # Still advance, or has_more_subtasks re-dispatches the same
+            # failing subtask forever.
+            "current_index": state["current_index"] + 1,
+        }
+
     print(f"  [Supervisor routed to: {result['next']}]")
     print(f"  [Critic verdict: {result['verdict']}, retries used: {result['retry_count']}]")
 
@@ -147,7 +188,14 @@ async def synthesize(state: PlannerState):
     prompt = (
         f"Original question: {state['question']}\n\n"
         f"Research notes:\n{subtasks_and_results}\n\n"
-        "Combine these into one clear final answer to the original question."
+        "Combine these into one clear final answer to the original question.\n"
+        # Without this, a failed subtask's placeholder reads to the model as
+        # a research finding, and the final answer states the failure as if
+        # it were something the research established.
+        f'If a subtask\'s answer is "{SUBTASK_FAILED_PLACEHOLDER}", that '
+        "subtask could not be researched - do not treat it as a finding. Say "
+        "plainly which part of the question you could not cover, and answer "
+        "the rest."
     )
     response = await chat_llm.ainvoke(prompt)
     return {"final_answer": response.content}

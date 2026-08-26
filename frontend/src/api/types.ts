@@ -14,15 +14,22 @@ export interface RejectRequest {
   thread_id: string;
 }
 
-export type Specialist = "research" | "knowledge" | "analysis";
+// "unknown" when the dispatch itself raised, so no specialist ever ran.
+export type Specialist = "research" | "knowledge" | "analysis" | "unknown";
 export type Verdict = "pass" | "retry";
 export type ThreadStatus = "awaiting_approval" | "completed" | "rejected";
+
+// "completed"    - the critic accepted the answer.
+// "needs_review" - the retry budget ran out with the critic still
+//                  rejecting; the last attempt was returned anyway.
+// "failed"       - research raised; there is no answer for this subtask.
+export type SubtaskStatus = "completed" | "needs_review" | "failed";
 
 export interface SubtaskTrace {
   subtask: string;
   specialist: Specialist;
   tools_used: string[];
-  status: "completed";
+  status: SubtaskStatus;
   verdict: Verdict;
   retry_count: number;
 }
