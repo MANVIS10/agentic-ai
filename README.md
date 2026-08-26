@@ -1,15 +1,18 @@
 # Personal Research Assistant
 
-A multi-agent research assistant built on LangGraph and LangChain: it plans a
-research question into subtasks, pauses for your approval, routes each subtask
-to a specialist agent, has a critic review the answer, and synthesizes the
-results — with RAG over documents you upload, all checkpointed to Postgres and
-reachable through a React UI.
+A multi-agent research assistant built on LangGraph and LangChain. Ask it a
+research question and it plans the work into subtasks, **pauses for your
+approval**, routes each subtask to the specialist best suited to it, has a
+critic review every answer, reflects on what it found — following up on gaps
+it discovers — and synthesizes the result. It answers from the web, from
+arithmetic it computes itself, and from documents *you* upload, with every
+step checkpointed to Postgres so a paused conversation survives a restart.
 
-The repo holds both the running application and the 25-stage learning archive it
-grew out of.
+**Live:** [agentic-ai-theta-seven.vercel.app](https://agentic-ai-theta-seven.vercel.app)
+(free tiers sleep — the first request after idling takes 30–60s)
 
-## Layout
+The repo holds both the running application and the 25-stage learning archive
+it grew out of.
 
 ```
 app/        FastAPI + LangGraph backend (the production package)
@@ -19,25 +22,23 @@ tests/      pytest suite for app/
 docs/       Specs, plans, and the project log
 ```
 
-## Architecture
+## How a question flows
 
 ```
-React UI  ──HTTP──▶  FastAPI  ──.invoke() / Command(resume)──▶  LangGraph
-frontend/            app/api/                                   app/graphs/
+React UI  ──HTTP──▶  FastAPI  ──.ainvoke() / Command(resume)──▶  LangGraph
+frontend/            app/api/                                    app/graphs/
                         │
                         ▼
                   Postgres + pgvector
             checkpoints · documents · document_chunks
 ```
 
-A request flows through five steps:
-
-1. **Planner** — an LLM breaks the question into 2–3 subtasks.
-2. **Human approval** — the graph calls `interrupt()` and pauses. `/chat`
-   returns the pending plan; `/approve` or `/reject` resumes it via
-   `Command(resume=...)`. Rejection routes straight to `END`.
-3. **Per-subtask research** — each subtask goes to an inner supervisor+critic
-   graph. The **supervisor** routes to one of three specialists:
+1. **Plan** — an LLM breaks the question into 2–3 concrete subtasks.
+2. **Human approval** — the graph calls `interrupt()` and stops. `/chat`
+   returns the pending plan; `/approve` or `/reject` resumes it with
+   `Command(resume=…)`. Rejection routes straight to `END`, no research done.
+3. **Research (a bounded ReAct loop)** — `react_step` takes the next item off
+   the agenda and hands it to an inner **supervisor + critic** graph:
 
    | Specialist | Tool |
    |---|---|
@@ -45,15 +46,25 @@ A request flows through five steps:
    | Knowledge Agent | `search_uploaded_documents` (pgvector RAG over *your own* uploads) |
    | Analysis Agent | `calculate` (AST-based arithmetic, no `eval`) |
 
-   The **critic** then judges the answer and can send one bounded retry back to
+   The **supervisor** picks one specialist by structured output; the
+   **critic** then judges the answer and can send one bounded retry back to
    the same specialist with feedback attached.
-4. **Synthesis** — the planner combines every subtask answer into one response.
-5. **Persistence** — every step is checkpointed to Postgres via `PostgresSaver`,
-   so a paused-for-approval conversation survives a backend restart.
+4. **Reflect** — after the agenda empties, an LLM looks at the findings and
+   may *append* a follow-up subtask. It can only add work, never skip or end
+   it: termination is a plain function (`decide_next_action`) capped at
+   `MAX_REACT_STEPS`, so the loop stays bounded and auditable no matter what
+   the model says. The approved subtasks always run.
+5. **Synthesize** — one final answer, assembled from the trace so a
+   discovered follow-up is included and a failed subtask is never read as a
+   finding.
+6. **Persist** — every step is checkpointed by `AsyncPostgresSaver`.
+
+The UI's trace panel shows, per subtask, which specialist handled it, which
+tool it called, and the critic's verdict.
 
 ## Quickstart
 
-**1. Database** (Postgres with the `pgvector` extension, on port 5433):
+**1. Database** — Postgres with `pgvector`, on port 5433:
 
 ```bash
 docker compose up -d
@@ -71,7 +82,9 @@ pip install -r requirements.txt
 uvicorn app.main:app --port 8000
 ```
 
-`OPENAI_API_KEY` is read from `.env` at the repo root.
+`OPENAI_API_KEY` is read from `.env` at the repo root — the only variable you
+must set for local development. Everything else has a working default (see
+[Configuration](#configuration)).
 
 **3. Frontend:**
 
@@ -84,37 +97,65 @@ npm run dev
 The UI expects the backend at `http://localhost:8000` — see
 `frontend/.env.example`.
 
-Signing in asks for a name and an access phrase. The phrase is the backend's
-`AUTH_SIGNUP_SECRET`; when that variable is unset the backend issues tokens
-without checking it, so any non-empty phrase works locally.
+**Signing in** asks for a name and an access phrase. The name becomes your
+`user_id`; the phrase is checked against the backend's `AUTH_SIGNUP_SECRET`.
+When that variable is unset — the local default — the backend issues tokens
+without checking it, so any non-empty phrase works.
 
 ## API
 
-| Method | Path | Purpose |
+Every user-scoped route takes its `user_id` from the bearer token, never from
+the request body.
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| `GET` | `/health` | — | Liveness plus a database round-trip (503 if Postgres is unreachable) |
+| `POST` | `/auth/token` | secret | Exchange the access phrase for a bearer token |
+| `POST` | `/chat` | bearer | Ask a question; returns the plan, pending approval |
+| `POST` | `/approve` | bearer | Resume the paused graph and run the research |
+| `POST` | `/reject` | bearer | Discard the plan without researching |
+| `GET` | `/documents` | bearer | List the calling user's uploaded documents |
+| `POST` | `/documents/upload` | bearer | Validate, extract, chunk, embed, and store a PDF/TXT/DOCX |
+| `POST` | `/documents/search` | bearer | Cosine-similarity search over that user's own chunks |
+| `POST` | `/documents/backfill-embeddings` | admin | Maintenance: embed chunks written before embeddings existed |
+
+Interactive docs at `/docs` once the backend is running.
+
+## Configuration
+
+Read by `app/config.py` from the environment or `.env`:
+
+| Variable | Default | Purpose |
 |---|---|---|
-| `GET` | `/health` | Liveness plus a database round-trip |
-| `POST` | `/chat` | Ask a question; returns the plan, pending approval |
-| `POST` | `/approve` | Resume the paused graph and run the research |
-| `POST` | `/reject` | Discard the plan without researching |
-| `GET` | `/documents` | List the calling user's uploaded documents |
-| `POST` | `/documents/upload` | Validate, extract, chunk, embed, and store a PDF/TXT/DOCX |
-| `POST` | `/documents/search` | Cosine-similarity search over that user's own chunks |
+| `OPENAI_API_KEY` | — | Required. Chat + embedding calls |
+| `DATABASE_URL` | local Docker Compose | Postgres connection string |
+| `ENVIRONMENT` | `dev` | `prod` enforces the startup checks below |
+| `ALLOWED_ORIGINS` | *(empty)* | CORS allow-list. In `dev` the Vite origin is added automatically; in `prod` this is the whole list |
+| `AUTH_SECRET_KEY` | *(ephemeral)* | HMAC signing key for tokens |
+| `AUTH_SIGNUP_SECRET` | *(unset — any phrase works)* | The shared access phrase |
+| `AUTH_ADMIN_SECRET` | *(unset)* | Separate secret for the backfill route only |
+| `OPENAI_CHAT_MODEL` / `OPENAI_EMBEDDING_MODEL` | `gpt-4o-mini` / `text-embedding-3-small` | Models |
+| `LLM_REQUEST_TIMEOUT_SECONDS` / `LLM_MAX_RETRIES` | `60` / `2` | Per-call timeout and retries |
+| `DB_POOL_MAX_SIZE` | `10` | Connection pool ceiling |
+
+With `ENVIRONMENT=prod`, `validate_for_startup()` refuses to boot on a
+misconfiguration — a fallback `DATABASE_URL`, `sslmode=disable`, a missing
+signing key or signup secret, an empty origin list — and reports *every*
+problem at once, so an operator fixes the whole list in one restart instead of
+rediscovering it one at a time.
 
 ## Tests
 
 ```bash
-pytest tests/
+pytest tests/                                    # everything (costs money)
+pytest tests/ --ignore=tests/test_app_backend.py # network-free unit tests
+cd frontend && npm test                          # vitest
 ```
 
-Requires the Postgres container running and `OPENAI_API_KEY` set — the
-end-to-end tests call the real OpenAI API, so a full run costs money and takes
-several minutes. Unit tests (`test_config`, `test_tools`, `test_agents`,
-`test_graphs`, `test_security`, `test_ingestion`, `test_schema_parity`) do not
-hit the network:
-
-```bash
-pytest tests/ --ignore=tests/test_app_backend.py
-```
+The full run needs the Postgres container up and `OPENAI_API_KEY` set: the
+end-to-end tests in `test_app_backend.py` call the real OpenAI API, so they
+take several minutes and cost real money. Every other test file is
+deterministic and hits no network.
 
 ## Known limitations
 
@@ -127,248 +168,75 @@ Stated plainly rather than left to be discovered:
   caller authenticated — not that they are who they claim.
 - **No streaming.** `/chat` and `/approve` are single blocking calls, so the
   trace panel populates once at the end rather than as a live feed.
-- **Rate limiting is in-process.** An unbounded dict with no TTL eviction, not
-  Redis. It does not survive a restart and does not coordinate across replicas.
-- **Subtasks run sequentially**, one at a time, even when independent.
-- **One shared database connection**, not a pool.
+- **Rate limiting is in-process.** A dict with a sliding window, not Redis. It
+  does not survive a restart and does not coordinate across replicas.
+- **Subtasks run sequentially**, one per ReAct step, even when independent.
 - `search_web` results are not wrapped in the untrusted-content envelope that
   guards retrieved documents — a known, deliberate gap.
 
-## Live deployment
+## Deployment
 
 Deployed on free tiers: frontend on Vercel, backend on Render, Postgres (with
-`pgvector`) on Neon.
+`pgvector`) on Neon, all building from the `dev` branch.
 
 - Frontend: https://agentic-ai-theta-seven.vercel.app
 - Backend: https://langgraph-backend-29wg.onrender.com
 
-Both tiers spin down after inactivity, so the first request after idling can
-take 30–60 seconds. See
-[`stages/stage25_react_ui/DEPLOYMENT.md`](stages/stage25_react_ui/DEPLOYMENT.md)
-for the full setup.
+See [`DEPLOYMENT.md`](DEPLOYMENT.md) for the full walkthrough — env vars, the
+startup checks, and migrating a backend deployed before bearer-token auth.
 
 ---
 
 # Learning archive
 
-The 25 stages below are how this was built — one concept at a time, each folder
-self-contained and runnable on its own, so any stage can be diffed against the
-next to see exactly what was added. They are kept frozen; `app/` is the
-consolidated production port of Stage 25.
+The 25 stages below are how this was built — one concept at a time, each
+folder self-contained and runnable on its own, so any stage can be diffed
+against the next to see exactly what was added. They are kept frozen; `app/`
+is the consolidated production port of Stage 25 and has since evolved past it
+(async pool, bearer tokens, the ReAct executor loop).
 
 ```bash
 python stages/stage1_chatbot/main.py
 ```
 
-## Stages
-
 | Stage | Folder | What it does | New concept |
 |---|---|---|---|
-| 1 | `stages/stage1_chatbot/` | Terminal chatbot that remembers the conversation | `StateGraph`, nodes/edges, checkpointer memory |
-| 2 | `stages/stage2_tool_agent/` | Chatbot can search the web to answer questions | Tool calling, ReAct loop |
-| 3 | `stages/stage3_rag/` | Answers questions grounded in your own documents | Embeddings, vector store, retrieval |
-| 4 | `stages/stage4_web_fetch/` | Fetches a URL and reads its page text | Tool with a real HTTP side effect |
-| 5 | `stages/stage5_pdf_fetch/` | Downloads a PDF and reads its extracted text | Binary content, PDF text extraction |
-| 6 | `stages/stage6_planner/` | Breaks a research question into subtasks, researches each, combines results | Custom state schema, hand-written conditional-edge loop |
-| 7 | `stages/stage7_human_in_loop/` | Shows the research plan and pauses for human y/n approval before any research runs | `interrupt()` / `Command(resume=...)`, pausing and resuming a graph |
-| 8 | `stages/stage8_research_workflow/` | Reuses Stage 7's plan/approval loop, but each subtask is now researched by a tool-calling agent with all four earlier tools bound together | Composing a compiled graph as a callable inside another graph's node |
-| 9 | `stages/stage9_simple_memory/` | Stage 1's chatbot plus `remember: <text>` / `recall` backed by a JSON file on disk | Long-term memory vs. per-thread graph state |
-| 10 | `stages/stage10_multi_tool_agent/` | Stage 2's flat chat loop, but with all four tools from Stages 2-5 bound together so the LLM picks whichever fits | Tool selection, isolated from planning/composition |
-| 11 | `stages/stage11_research_agent/` | Stage 2's agent narrowed to one tool (web search) plus a system prompt naming it a "Research Agent" | Specialization - a declared role + narrow toolset, vs. a generalist |
-| 12 | `stages/stage12_two_specialist_agents/` | Two independent specialists (Research Agent, Knowledge Agent), Stage 11's pattern repeated with different tools, picked by a hard-coded prefix | Proving specialization generalizes - two agents coexisting with zero shared state |
-| 13 | `stages/stage13_supervisor/` | Same two specialists, now as subgraphs inside one outer graph with a supervisor node routing between them | Structured LLM output + conditional edge on a routing field |
-| 14 | `stages/stage14_critic/` | Same supervisor + specialists, plus a critic node that reviews the answer and can send one bounded retry back to the same specialist | A second structured-output node judging quality, plus a bounded retry loop (conditional edge routing backward) |
-| 15 | `stages/stage15_analysis_agent/` | A third independent specialist (Stage 11/12's pattern again) with one tool, `calculate`, for arithmetic over numbers given in the conversation | A "compute" specialist rather than a "retrieve" one - same graph shape, different kind of tool |
-| 16 | `stages/stage16_three_specialist_supervisor/` | Stage 15's Analysis Agent joins Stage 13/14's supervisor + critic graph, alongside Research and Knowledge | Widening a structured-output routing field from two choices to N, and confirming the critic needs no changes to support it |
-| 17 | `stages/stage17_final_multi_agent_system/` | Stage 7/8's planner + human-approval loop, with each subtask now researched by Stage 16's full supervisor + three-specialist + critic pipeline instead of a plain LLM call or a flat tool agent | The final combined multi-agent research assistant - composing two independently-built graphs, proving a compiled `StateGraph` invoked inside a node is just a function call regardless of how elaborate that graph is |
-| 18 | `stages/stage18_postgres_persistence/` | Stage 17's exact graph, with its checkpointer swapped from `MemorySaver` to `PostgresSaver` (Postgres via Docker Compose) | Durable checkpointing - a paused or completed conversation now survives a Python process restart, not just a `thread_id` switch within the same process |
-| 19 | `stages/stage19_fastapi_backend/` | Stage 18's exact graph, wrapped in a FastAPI HTTP API (`/health`, `/chat`, `/approve`, `/reject`) instead of a terminal REPL, same Postgres checkpointer | Exposing a compiled LangGraph graph over HTTP - `interrupt()`/`Command(resume=...)` now spans two separate HTTP requests instead of one blocking REPL loop, and `graph.get_state()` becomes the way to validate a pending approval before resuming it |
-| 20 | `stages/stage20_document_upload/` | Stage 19's exact app plus one new endpoint, `POST /documents/upload`, that validates, extracts, chunks, and durably stores an uploaded PDF/TXT/DOCX file in two new Postgres tables (`documents`, `document_chunks`) | Accepting and storing arbitrary user-supplied file uploads - the first hand-written (non-checkpointer-owned) Postgres tables in this repo; storage only, no embeddings/retrieval yet |
-| 21 | `stages/stage21_semantic_search/` | Stage 20's exact app plus embeddings for every uploaded chunk (`pgvector`), a backfill endpoint for pre-existing chunks, and `POST /documents/search` for cosine-similarity search with configurable `top_k`/threshold/document scoping | Durable vector storage via Postgres + `pgvector`, instead of an in-memory store rebuilt every process start; the first schema *evolution* (`ALTER TABLE ... ADD COLUMN`) in this repo, not just first-time table creation; search only, no RAG/agent wiring yet |
-| 22 | `stages/stage22_knowledge_agent_rag/` | Stage 21's exact app with the Knowledge Agent's tool replaced: `search_uploaded_documents` (pgvector search over `document_chunks`, in-process) instead of `search_knowledge_base` (the bundled `knowledge_base/*.md`) | A specialist's tool can be swapped out entirely without touching the supervisor, critic, or planner above it - `knowledge_node` only ever calls `knowledge_graph.invoke(...)` and never references a tool by name. Deliberately a *replacement*, not an addition: the bundled knowledge base is unreachable from this stage for normal queries, kept intact only in Stage 3-21 for historical compatibility |
-| 23 | `stages/stage23_user_document_isolation/` | Stage 22's exact app with every uploaded document now owned by a caller-supplied `user_id`, filtered on both `POST /documents/search` and the Knowledge Agent's `search_uploaded_documents` tool, so one user's uploads can never be returned to another user | A tool bound to an LLM can read trusted, server-side context the model itself can never see or set - `search_uploaded_documents`'s new `user_id` argument is populated via `langgraph.prebuilt.InjectedState` straight from graph state, excluded from the schema the model sees, closing off the "tool argument the LLM could be tricked into changing" attack this stage exists to prevent |
-| 24 | `stages/stage24_security_guardrails/` | Stage 23's exact app hardened against malicious/malformed input: bounded file reads, PDF-page/DOCX-zip-bomb/extraction-timeout caps, input length limits on every free-text field, a request-body-size middleware, an untrusted-content envelope + hardened prompt around the Knowledge Agent's tool output, a deterministic system-prompt-leak guard, and in-process per-route rate limiting | Untrusted retrieved content needs framing, not filtering - document text handed back by a tool is wrapped as explicit data the model reasons *about*, never instructions it *follows*, and a non-LLM output check catches a leak regardless of how it was phrased. No new capability, no authentication - purely narrowing what malicious input can make the existing pipeline do |
-| 25 | `stages/stage25_react_ui/` | A React + TypeScript single-page app (document upload/list, chat, human approval, execution trace) talking to Stage 24's exact FastAPI contract, plus two additive backend changes: `GET /documents` and a `trace` field on `ThreadStatusResponse` | A frontend can reach a fully-built multi-agent backend by adding exactly two response shapes and one CORS middleware - no LangGraph node, edge, prompt, or tool changes. The trace panel surfaces data (routing decision, tool used, critic verdict) that already existed in memory and was only ever `print()`ed, never returned over HTTP |
+| 1 | `stage1_chatbot/` | Terminal chatbot that remembers the conversation | `StateGraph`, nodes/edges, checkpointer memory |
+| 2 | `stage2_tool_agent/` | Searches the web to answer questions | Tool calling, the ReAct loop |
+| 3 | `stage3_rag/` | Answers from a local markdown knowledge base | Chunking, embeddings, vector store, retrieval |
+| 4 | `stage4_web_fetch/` | Fetches a URL and reads its page text | A tool with a real HTTP side effect |
+| 5 | `stage5_pdf_fetch/` | Downloads a PDF and reads its text | Binary content, PDF extraction |
+| 6 | `stage6_planner/` | Splits a question into subtasks, researches each, combines them | Custom state schema, hand-written conditional-edge loop |
+| 7 | `stage7_human_in_loop/` | Pauses for y/n approval of the plan before any research runs | `interrupt()` / `Command(resume=…)` |
+| 8 | `stage8_research_workflow/` | Stage 7's planner, but each subtask goes to a tool-calling agent with all four earlier tools | Composing a compiled graph as a callable inside a node |
+| 9 | `stage9_simple_memory/` | `remember: <text>` / `recall`, backed by a JSON file | Long-term memory vs. per-thread graph state |
+| 10 | `stage10_multi_tool_agent/` | One flat agent, all four tools, LLM picks | Tool selection in isolation |
+| 11 | `stage11_research_agent/` | One tool + a system prompt declaring a role | Specialization vs. a generalist |
+| 12 | `stage12_two_specialist_agents/` | Two specialists side by side, picked by a typed prefix | Specialization generalizes — zero shared state |
+| 13 | `stage13_supervisor/` | A supervisor node routes between them | Structured output + conditional edge on a routing field |
+| 14 | `stage14_critic/` | A critic reviews the answer, one bounded retry | A second structured-output node, routing backward |
+| 15 | `stage15_analysis_agent/` | A third specialist with `calculate` | A "compute" specialist, not a "retrieve" one |
+| 16 | `stage16_three_specialist_supervisor/` | Analysis joins the supervisor + critic graph | Widening a routing `Literal` from two choices to N |
+| 17 | `stage17_final_multi_agent_system/` | Planner + approval wrapped around the full supervisor/specialist/critic pipeline | The capstone: composing two independently-built graphs |
+| 18 | `stage18_postgres_persistence/` | Same graph, `PostgresSaver` instead of `MemorySaver` | Durable checkpointing across process restarts |
+| 19 | `stage19_fastapi_backend/` | Same graph behind FastAPI instead of a REPL | `interrupt()`/resume spanning two HTTP requests |
+| 20 | `stage20_document_upload/` | `POST /documents/upload` stores PDF/TXT/DOCX | First hand-written (non-checkpointer) Postgres tables |
+| 21 | `stage21_semantic_search/` | Embeddings per chunk + `POST /documents/search` | `pgvector`, and the repo's first schema *evolution* |
+| 22 | `stage22_knowledge_agent_rag/` | Knowledge Agent answers from *uploads* instead of the bundled docs | A specialist's tool swapped with nothing above it changing |
+| 23 | `stage23_user_document_isolation/` | Every document owned by a `user_id`, filtered on both retrieval paths | `InjectedState` — a tool argument the model can't see or set |
+| 24 | `stage24_security_guardrails/` | Hardened against malicious input end to end | Untrusted content needs framing, not filtering |
+| 25 | `stage25_react_ui/` | React SPA: upload, chat, approval, execution trace | A full frontend for two additive response shapes |
 
-`stage4_web_fetch`, `stage5_pdf_fetch`, `stage6_planner`, and
-`stage7_human_in_loop` are follow-on tool stages built by request rather
-than the original numbered slots below (`stage4_planner` was the original
-name for what's now `stage6_planner`; `stage5_human_in_loop` was the
-original name for what's now `stage7_human_in_loop`). Stages 12-14 follow
-the same pattern against the project spec's own numbering (spec "Stage 11 —
-Specialist Agents" -> `stage12_two_specialist_agents`, spec "Stage 12 —
-Supervisor" -> `stage13_supervisor`, spec "Stage 13 — Critic" ->
-`stage14_critic`) — see `PROGRESS.md` for the up-to-date picture.
+Each folder has its own `README.md` with the full breakdown: what was added,
+the concept it demonstrates, its architecture, how to run it, and what changed
+versus the previous stage. `docs/PROGRESS.md` is the running log, including
+notes on what each stage taught.
 
-Each folder has its own `README.md` with the full breakdown: what was
-added, the concept it demonstrates, its architecture, how to run it, and
-what changed vs. the previous stage.
-
-The long-term target concept progression is more granular than the folders
-above, and not yet fully reconciled with the numbering that actually
-happened on disk: stateful chatbot -> tools -> web research -> ReAct agent
--> RAG -> memory -> planning -> specialist agents -> supervisor -> critic ->
-multi-agent research system. Rather than one folder per concept, several
-adjacent concepts are taught together within a single stage folder:
-
-- Stage 2 covers tools + web research + the ReAct agent loop together.
-- Stage 3 covers RAG plus document-grounded memory.
-- Stages 4-5 cover tool side effects beyond retrieval (HTTP fetch, binary
-  PDF content) rather than planning — a deviation from the original slot.
-- Stage 6 covers planning (breaking a question into subtasks via a
-  hand-written conditional-edge loop) — this was originally meant to be
-  Stage 4.
-- Stage 7 covers human-in-the-loop approval — it extends Stage 6's planner
-  with one `interrupt()` before research begins, pausing the graph for a
-  human to approve or reject the whole plan, then `Command(resume=...)`
-  continuing it (or routing straight to `END` on rejection) — this was
-  originally meant to be Stage 5.
-- Stage 8 covers combining existing capabilities — Stage 7's planner is
-  unchanged, but each subtask is now researched by a small tool-calling
-  agent with all four tools from Stages 2-5 bound together, so the model
-  picks whichever tool actually fits each subtask.
-- Stage 9 covers long-term memory — Stage 1's one-node chatbot is
-  unchanged, with `save_memory`/`load_memory` (plain functions, not tools)
-  added alongside it to show a fact on disk outlives `MemorySaver`'s
-  per-thread state, surviving a different `thread_id` or a process
-  restart.
-- Stage 10 covers tool selection on its own - the same four tools Stage 8
-  bound together, but as the whole graph (Stage 2's flat `agent -> tools ->
-  agent` loop) instead of one node inside a bigger planner graph.
-- Stage 11 covers specialization - Stage 2's loop narrowed to one tool
-  (web search) plus a system prompt declaring the agent's identity and
-  job, in contrast to Stage 10's generalist multi-tool agent.
-- Stage 12 covers specialist agents plural - Stage 11's pattern (narrow
-  toolset + declared identity) stamped out twice with different tools, run
-  side by side in one process with zero shared state or communication, and
-  picked by a hard-coded prefix typed by the human.
-- Stage 13 covers a supervisor - a routing node (structured LLM output)
-  placed in front of Stage 12's two specialists (now subgraphs inside one
-  outer graph), replacing the hard-coded prefix with an actual classify-
-  and-route decision.
-- Stage 14 covers a critic - a review node placed after Stage 13's
-  specialists that judges the answer (structured LLM output: pass/retry)
-  and can send one bounded retry back to the same specialist with
-  feedback attached, before the answer is treated as final.
-- Stage 15 covers the third named specialist from the spec (Research,
-  Knowledge, Analysis) - Stage 11/12's pattern (narrow toolset + declared
-  identity) stamped out a third time, with one tool (`calculate`, a safe
-  `ast`-based arithmetic evaluator) for sums, averages, percentage change,
-  and comparisons over numbers given directly in the conversation. Built
-  standalone with no supervisor/critic wiring, same as Stage 11/12 were
-  before Stage 13 added routing.
-- Stage 16 covers widening the supervisor + critic to a third specialist -
-  Stage 15's Analysis Agent plugs into Stage 13/14's graph with only a
-  wider routing `Literal` and one more entry in each conditional-edge
-  dispatch dict. The critic (Stage 14) needed zero code changes, since it
-  only ever judges a question/answer pair and never special-cases which
-  specialist produced it.
-- Stage 17 covers the final combined multi-agent system - Stage 7/8's
-  planner + human-approval loop, with `research_subtask` now delegating
-  each subtask to Stage 16's full supervisor + three-specialist + critic
-  pipeline instead of a plain LLM call (Stage 6/7) or a single flat 4-tool
-  agent (Stage 8). Nothing new was invented: it's pure composition of two
-  independently-built graphs, meeting only at one function call inside
-  `research_subtask`.
-- Stage 18 covers durable checkpointing - a deliberate extension added
-  after the roadmap above closed at Stage 17, not a missed roadmap item.
-  Stage 17's exact graph, unchanged, with `MemorySaver` swapped for
-  `PostgresSaver` (a real Postgres database, provisioned via the root
-  `docker-compose.yml`), so a paused-for-approval or completed
-  conversation now survives killing and restarting the Python process.
-- Stage 19 covers exposing the graph over HTTP - another deliberate
-  extension past the closed roadmap. Stage 18's exact graph, unchanged,
-  wrapped in a FastAPI app with four endpoints instead of a terminal REPL.
-  `interrupt()`/`Command(resume=...)` now spans two separate HTTP requests
-  (`POST /chat` pauses and returns; a later `POST /approve` or
-  `POST /reject` resumes the same `thread_id`) instead of one blocking
-  `input()` loop, and `graph.get_state()` becomes load-bearing rather than
-  a debugging convenience - it's how `/approve`/`/reject` confirm a thread
-  is actually paused before resuming it.
-- Stage 20 covers document upload and ingestion - another deliberate
-  extension past the closed roadmap. Stage 19's exact app, unchanged, plus
-  `POST /documents/upload`: validates a PDF/TXT/DOCX file, extracts its
-  text (`pypdf`/`python-docx`/plain decode), chunks it
-  (`RecursiveCharacterTextSplitter`, same settings as the bundled
-  knowledge-base loader), and stores it in two new tables written with
-  hand-written SQL rather than owned by `PostgresSaver`. Deliberately
-  storage-only - no embeddings, vector search, or Knowledge Agent wiring
-  yet (see `docs/specs/stage20_document_upload_spec.md`).
-- Stage 21 covers embeddings and semantic vector search - another
-  deliberate extension past the closed roadmap. Stage 20's exact app,
-  unchanged, plus an `embedding vector(1536)` column added to
-  `document_chunks` (the first schema *evolution* in this repo, via
-  `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, not just first-time table
-  creation), a `POST /documents/backfill-embeddings` endpoint for chunks
-  uploaded before this stage existed, and `POST /documents/search` for
-  cosine-similarity search (`pgvector`'s `<=>` operator) with configurable
-  `top_k`, an optional similarity threshold, and optional per-document
-  scoping. Requires `docker-compose.yml`'s Postgres image swapped to
-  `pgvector/pgvector:pg16` to support the extension. Deliberately search-
-  only - no RAG answer generation or Knowledge Agent wiring yet (see
-  `docs/specs/stage21_semantic_search_spec.md`).
-- Stage 22 covers wiring that search into the Knowledge Agent - another
-  deliberate extension past the closed roadmap. Stage 21's exact app,
-  unchanged, except the Knowledge Agent's tool is *replaced*:
-  `search_uploaded_documents` (a new `@tool` running Stage 21's cosine-
-  similarity query in-process against `document_chunks`) instead of
-  `search_knowledge_base` (the bundled `knowledge_base/*.md` via
-  `InMemoryVectorStore`). This is a deliberate design choice, not the
-  default additive one: for normal queries, the bundled knowledge base
-  must not be reachable at all, so it's dropped from this stage's own copy
-  entirely rather than bound alongside the new tool. It remains fully
-  intact and working in Stage 3, 8, 10, 16-21 - "historical compatibility"
-  means those folders are untouched, not that this stage carries the
-  capability forward. The supervisor, critic, planner, and every other
-  route are byte-identical to Stage 21 (see
-  `docs/specs/stage22_knowledge_agent_rag_spec.md`).
-- Stage 23 covers isolating uploaded documents per user - another
-  deliberate extension past the closed roadmap. Stage 22's exact app,
-  unchanged, except `documents` gains a `user_id TEXT NOT NULL DEFAULT
-  'default-user'` column (migrated via `ALTER TABLE ... ADD COLUMN IF NOT
-  EXISTS`, backfilling every pre-existing row to the sentinel owner in the
-  same statement), and both retrieval paths - `POST /documents/search` and
-  the Knowledge Agent's `search_uploaded_documents` tool - filter every
-  query by it. `user_id` is a required, caller-supplied field on `POST
-  /chat`, `POST /documents/upload`, and `POST /documents/search`, trusted
-  at face value like `thread_id` always has been - not authentication.
-  The tool's `user_id` argument reaches it via
-  `langgraph.prebuilt.InjectedState`, populated from graph state and
-  invisible to the model, so an LLM can never be tricked into supplying
-  someone else's `user_id` (see
-  `docs/specs/stage23_user_document_isolation_spec.md`).
-- Stage 24 covers security and production guardrails - another deliberate
-  extension past the closed roadmap. Stage 23's exact app, hardened rather
-  than extended: bounded reads and a filename length cap on
-  `POST /documents/upload`; a PDF page-count cap, a `zipfile`-based DOCX
-  zip-bomb guard, and a `ThreadPoolExecutor` extraction timeout, all
-  collapsing into the same generic `422` so no guard-specific detail leaks;
-  non-empty + max-length checks on every free-text field that had none
-  (`question`, `thread_id`, `query`) plus a `top_k` upper bound and a
-  `Content-Length`-based body-size middleware; `search_uploaded_documents`'s
-  output wrapped in an explicit untrusted-data envelope and
-  `KNOWLEDGE_SYSTEM_PROMPT` hardened to say so; a deterministic (non-LLM)
-  `_leaks_system_prompt` check that replaces the Knowledge Agent's final
-  answer if it ever recites a verbatim span of its own system prompt; and
-  an in-process, per-route (`chat`/`upload`/`search`), per-`user_id`-and-IP
-  sliding-window rate limiter reusing Stage 19's `_thread_locks` idiom - no
-  new dependency, no Redis, no authentication (see
-  `docs/specs/stage24_security_guardrails_spec.md`).
-- Stage 25 covers a React frontend - another deliberate extension past the
-  closed roadmap, and the first frontend in this project (every prior
-  stage was exercised through `curl`/`TestClient`/a terminal REPL). A
-  React + TypeScript single-page app (document upload/list, chat, human
-  approval, execution trace) talking to Stage 24's exact HTTP contract,
-  plus two confirmed additive backend changes living in a new
-  `stages/stage25_react_ui/backend/main.py` (Stage 24's file, byte-identical
-  except for these): `GET /documents` (the `documents` table already had
-  every column a listing needed; it was just never `SELECT`ed by any
-  route) and a `trace` field on `ThreadStatusResponse`, populated only by
-  `POST /approve` (which specialist handled each subtask, which tool it
-  called, the critic's verdict - all already computed inside
-  `research_subtask()`/`research_node`/`knowledge_node`/`analysis_node`,
-  previously only `print()`ed). No LangGraph node, edge, prompt, or tool
-  changes; no authentication; no streaming - `/approve` stays one
-  blocking call, so the trace panel populates once, after the fact, never
-  as a live feed (see `docs/specs/stage25_react_ui_spec.md`).
-
+**On the numbering:** folder numbers drifted from the original roadmap. The
+web-fetch and PDF-fetch tools (4–5) were built by request ahead of planning,
+so planning landed at 6 and human-in-the-loop at 7; stages 12–14 likewise sit
+one ahead of the project spec's own numbering (spec "Stage 11 — Specialist
+Agents" is `stage12_two_specialist_agents`, and so on). The roadmap closed at
+Stage 17 — the multi-agent capstone — and stages 18–25 are deliberate
+extensions past it, each adding one production concern to the previous
+stage's app. Trust the folder names.

@@ -1,5 +1,11 @@
 # Deploying Stage 25 (free tier)
 
+> **Archived.** This documents deploying the *stage folder*, and is kept as
+> the record of the original 2026-08-25 deploy. The live services now run the
+> production package (`app/` + `frontend/`), which has a different root
+> directory, start command, and required auth secrets — see the repo root's
+> [`DEPLOYMENT.md`](../../DEPLOYMENT.md).
+
 This stage runs as three independent pieces locally (Postgres via Docker
 Compose, FastAPI backend, Vite frontend) with **no hardcoded hosts** —
 `DATABASE_URL`, `ALLOWED_ORIGINS`, and `VITE_API_BASE_URL` are all read from

@@ -4,10 +4,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A project-based learning repo for LangGraph/LangChain, structured as a "Personal
-Research Assistant" that grows in capability stage by stage — from a plain
-chatbot up to a multi-agent system. The user is a beginner learning the
-frameworks; code should stay readable and pedagogical over clever or terse.
+A "Personal Research Assistant" built on LangGraph/LangChain, in two halves:
+a **running application** (`app/` + `frontend/`) and the **25-stage learning
+archive** it grew out of (`stages/`). The stages take the assistant from a
+plain chatbot up to a deployed multi-agent system, one concept at a time.
+The user is a beginner learning the frameworks; code should stay readable and
+pedagogical over clever or terse.
+
+## Repo layout
+
+```
+app/        FastAPI + LangGraph backend (the production package)
+frontend/   React + TypeScript UI
+stages/     The 25 learning stages, each self-contained and runnable
+tests/      pytest suite for app/
+docs/       Specs, plans, and the project log (docs/PROGRESS.md)
+```
 
 ## Setup and running
 
@@ -18,40 +30,55 @@ frameworks; code should stay readable and pedagogical over clever or terse.
 source .venv/bin/activate
 
 pip install -r requirements.txt
+
+# a stage
 python stages/stage1_chatbot/main.py
+
+# the app (needs Postgres + pgvector from docker-compose.yml, port 5433)
+docker compose up -d
+uvicorn app.main:app --port 8000
 ```
 
-`OPENAI_API_KEY` is read from `.env` via `python-dotenv`. There is no build
-step, linter, or test suite configured yet. Where a stage has a test (e.g.
-`stages/stage3_rag/test_search_knowledge_base.py`), it's a standalone script run
-directly with `python`, not a pytest suite — asserts + prints, no test
-framework dependency.
+`OPENAI_API_KEY` is read from `.env` at the repo root via `python-dotenv`.
+There is no linter configured. The only pytest suite is `tests/`, which
+covers `app/` (see below); the stage folders' own tests (e.g.
+`stages/stage3_rag/test_search_knowledge_base.py`) are standalone scripts run
+directly with `python` — asserts + prints, no test framework dependency.
+
+Deployment is documented in `stages/stage25_react_ui/DEPLOYMENT.md` (Neon
+Postgres -> Render backend -> Vercel frontend); there is no numbered
+"deployment stage".
 
 ## `app/` package tests (production port)
 
 `app/` is a production-style port of `stages/stage25_react_ui/backend/main.py`
 (see `docs/superpowers/plans/2026-08-25-production-package-port.md`),
-tested with pytest under `tests/`. Unit tests there (`test_config.py`,
-`test_db.py`, `test_tools.py`, `test_agents.py`, `test_graphs.py`,
-`test_ingestion.py`, `test_security.py`) must **not** call the real OpenAI
-API — no `.invoke()`/`.embed_*()` on a live `ChatOpenAI`/`OpenAIEmbeddings`
-instance during a normal `pytest tests/` run, since that costs money and
-makes the suite non-deterministic and network-dependent. Only an
-end-to-end test explicitly gated behind the `openai_available` fixture
-(skipped whenever `OPENAI_API_KEY` isn't set) may hit the real API — same
-spirit as this project's existing convention of calling out real-API-cost
-tests explicitly rather than running them by default.
+tested with pytest under `tests/`. The unit tests there must **not** call the
+real OpenAI API — no `.invoke()`/`.embed_*()` on a live
+`ChatOpenAI`/`OpenAIEmbeddings` instance during a normal `pytest tests/` run,
+since that costs money and makes the suite non-deterministic and
+network-dependent. Only end-to-end tests explicitly gated behind the
+`openai_available` fixture (skipped whenever `OPENAI_API_KEY` isn't set) may
+hit the real API — same spirit as this project's existing convention of
+calling out real-API-cost tests explicitly rather than running them by
+default. In practice that gate is `tests/test_app_backend.py`, so the
+network-free run is:
+
+```bash
+pytest tests/ --ignore=tests/test_app_backend.py
+```
 
 ## Architecture: stage folders
 
-Each stage lives in its own top-level folder (`stages/stage1_chatbot/`,
-`stages/stage2_tool_agent/`, ...) and is a **self-contained, runnable script** — not
-a shared library. Later stages are expected to duplicate setup code from
-earlier ones (LLM init, graph boilerplate) rather than import a common
-module. This is deliberate: each folder should be readable top-to-bottom on
-its own so the user can diff one stage against the next to see exactly what
-concept was added. Do not refactor shared code out into a `common/` module
-unless explicitly asked.
+Each stage lives in its own folder under `stages/` and is a
+**self-contained, runnable script** — not a shared library. Later stages are
+expected to duplicate setup code from earlier ones (LLM init, graph
+boilerplate) rather than import a common module. This is deliberate: each
+folder should be readable top-to-bottom on its own so the user can diff one
+stage against the next to see exactly what concept was added. Do not refactor
+shared code out into a `common/` module unless explicitly asked. (`app/` is
+the one exception, and it is a *port* of Stage 25 rather than a dependency of
+any stage — the stages stay frozen and runnable on their own.)
 
 Every stage folder must include its own `README.md` covering: what was
 added, which LangChain/LangGraph concept it demonstrates, its architecture,
@@ -61,55 +88,113 @@ isn't done until this README exists.
 Implement only one stage at a time — do not build ahead into future-stage
 functionality unless explicitly requested. When adding a new stage, leave
 previous stages' code untouched (README/roadmap status updates in the
-top-level `README.md` excepted).
+top-level `README.md` and `docs/PROGRESS.md` excepted).
 
-The progression so far (see `README.md` and `PROGRESS.md` for the full
-table and status checklist):
+## The 25 stages
 
-1. `stages/stage1_chatbot/` — `StateGraph` + `MemorySaver`, single node, terminal
-   REPL with per-thread memory (implemented)
-2. `stages/stage2_tool_agent/` — tool calling / ReAct loop via `bind_tools`,
-   `ToolNode`, and `tools_condition`, using `DuckDuckGoSearchRun` (no API
-   key needed) (implemented)
-3. `stages/stage3_rag/` — retrieval over a local markdown knowledge base:
-   `RecursiveCharacterTextSplitter` for chunking, `OpenAIEmbeddings`, and
-   `InMemoryVectorStore` (no extra vector-store dependency), exposed as a
-   single `search_knowledge_base` tool. Same `agent -> tools -> agent`
-   conditional-edge shape as Stage 2 (node renamed `chatbot` -> `agent`)
-   (implemented)
-4. `stages/stage4_web_fetch/` — `fetch_webpage` tool: fetches a URL over HTTP and
-   parses its HTML into text with BeautifulSoup, a tool with a real
-   external side effect rather than just reading from an index
-   (implemented)
-5. `stages/stage5_pdf_fetch/` — `fetch_pdf` tool: downloads a PDF's raw bytes with
-   `requests` and extracts its text page-by-page with `pypdf`, no
-   `Content-Type` sniffing or HTML fallback (implemented)
-6. `stages/stage6_planner/` — custom state schema + a hand-written conditional
-   edge (no `bind_tools`) that breaks a research question into 2-3
-   subtasks, loops over them one at a time, and synthesizes a final answer
-   (implemented)
-7. `stages/stage7_human_in_loop/` — Stage 6's planner with one added node,
-   `human_approval`, that calls `interrupt()` once to show the plan and
-   wait for human y/n approval before research begins, resumed via
-   `Command(resume=...)`; rejection routes straight to `END` with no
-   research done (implemented)
+All 25 are implemented. The top-level `README.md` has the full table and
+`docs/PROGRESS.md` the running log; each folder's own `README.md` has the
+detail. Summary:
 
-Stages 4-7 deviated from the original planned slots below them: the
-web-fetch and PDF-fetch tools were built by request ahead of planning, the
-planning concept (originally slated for stage 4) ended up at stage 6, and
-human-in-the-loop (originally slated for stage 5) ended up at stage 7. One
-concept from the original roadmap is still unbuilt and doesn't have a
-folder number assigned yet:
+1. `stage1_chatbot/` — `StateGraph` + `MemorySaver`, single node, terminal REPL
+   with per-thread memory.
+2. `stage2_tool_agent/` — tool calling / ReAct loop via `bind_tools`,
+   `ToolNode`, `tools_condition`, using `DuckDuckGoSearchRun`.
+3. `stage3_rag/` — retrieval over a local markdown knowledge base:
+   `RecursiveCharacterTextSplitter`, `OpenAIEmbeddings`, `InMemoryVectorStore`,
+   exposed as one `search_knowledge_base` tool. Node renamed `chatbot` -> `agent`.
+4. `stage4_web_fetch/` — `fetch_webpage`: HTTP GET + BeautifulSoup
+   HTML-to-text. A tool with a real external side effect rather than an index
+   read.
+5. `stage5_pdf_fetch/` — `fetch_pdf`: `requests` for raw bytes, `pypdf` for
+   page-by-page text. No `Content-Type` sniffing, no HTML fallback.
+6. `stage6_planner/` — custom state schema + a hand-written conditional edge
+   (no `bind_tools`): breaks a question into 2-3 subtasks, loops over them one
+   at a time, synthesizes a final answer.
+7. `stage7_human_in_loop/` — Stage 6 plus a `human_approval` node calling
+   `interrupt()` once to show the plan and wait for y/n, resumed via
+   `Command(resume=...)`; rejection routes straight to `END`.
+8. `stage8_research_workflow/` — Stage 7's planner unchanged, but each subtask
+   is researched by a tool-calling agent with all four earlier tools bound
+   together. Composing a compiled graph as a callable inside another node.
+9. `stage9_simple_memory/` — Stage 1's chatbot plus `remember: <text>` /
+   `recall` backed by a JSON file. Long-term memory vs. per-thread graph state.
+10. `stage10_multi_tool_agent/` — Stage 2's flat loop with all four tools bound
+    so the LLM picks whichever fits. Tool selection, isolated from planning.
+11. `stage11_research_agent/` — Stage 2 narrowed to one tool (`search_web`) plus
+    a system prompt naming it a "Research Agent". Specialization vs. generalist.
+12. `stage12_two_specialist_agents/` — Research + Knowledge specialists side by
+    side, zero shared state, picked by a hard-coded prefix.
+13. `stage13_supervisor/` — those two specialists as subgraphs inside one outer
+    graph, with a supervisor node routing between them (structured LLM output
+    + conditional edge on a routing field).
+14. `stage14_critic/` — a critic node reviews the answer (pass/retry) and can
+    send one bounded retry back to the same specialist with feedback attached.
+15. `stage15_analysis_agent/` — a third standalone specialist with one tool,
+    `calculate` (safe `ast`-based arithmetic). A "compute" specialist rather
+    than a "retrieve" one; no supervisor wiring yet.
+16. `stage16_three_specialist_supervisor/` — the Analysis Agent joins Stage
+    13/14's graph: a wider routing `Literal` and one more dispatch entry. The
+    critic needed zero changes.
+17. `stage17_final_multi_agent_system/` — Stage 7/8's planner + approval loop
+    with each subtask delegated to Stage 16's full supervisor +
+    three-specialist + critic pipeline. Pure composition of two
+    independently-built graphs; the original roadmap's capstone.
 
-- Multi-agent system — planner/researcher/writer/reviewer as separate
-  collaborating agents (subgraphs)
+Stages 18-25 are deliberate extensions added *after* that roadmap closed at
+Stage 17 — each takes the previous stage's app essentially unchanged and adds
+a single production concern:
 
-Each tool-using stage binds exactly one tool to its agent (stages don't
-accumulate each other's tools): Stage 2 -> `DuckDuckGoSearchRun` (web
-search), Stage 3 -> `search_knowledge_base` (local retrieval), Stage 4 ->
-`fetch_webpage` (HTTP fetch + HTML parsing), Stage 5 -> `fetch_pdf`
-(PDF download + text extraction). Stages 6 and 7 use plain LLM calls with
-no bound tool.
+18. `stage18_postgres_persistence/` — `MemorySaver` -> `PostgresSaver`
+    (Postgres via the root `docker-compose.yml`). A paused conversation now
+    survives a process restart.
+19. `stage19_fastapi_backend/` — the same graph behind FastAPI (`/health`,
+    `/chat`, `/approve`, `/reject`) instead of a REPL, so
+    `interrupt()`/`Command(resume=...)` spans two HTTP requests and
+    `graph.get_state()` becomes load-bearing.
+20. `stage20_document_upload/` — `POST /documents/upload`: validate, extract,
+    chunk, and store a PDF/TXT/DOCX in two hand-written Postgres tables
+    (`documents`, `document_chunks`). Storage only, no embeddings.
+21. `stage21_semantic_search/` — an `embedding vector(1536)` column
+    (`pgvector`, image swapped to `pgvector/pgvector:pg16`), a backfill
+    endpoint, and `POST /documents/search` (cosine similarity via `<=>`).
+    The repo's first schema *evolution*. Search only, no agent wiring.
+22. `stage22_knowledge_agent_rag/` — the Knowledge Agent's tool *replaced*:
+    `search_uploaded_documents` (pgvector over `document_chunks`) instead of
+    `search_knowledge_base`. Supervisor/critic/planner untouched — a
+    specialist's tool can be swapped from underneath them. Deliberately a
+    replacement, so the bundled `knowledge_base/*.md` is unreachable here; it
+    stays intact in the earlier stages only.
+23. `stage23_user_document_isolation/` — every document owned by a `user_id`,
+    filtered on both retrieval paths. The tool's `user_id` arrives via
+    `langgraph.prebuilt.InjectedState` from graph state, invisible to the
+    model, so the LLM can never be tricked into supplying someone else's.
+24. `stage24_security_guardrails/` — hardening, no new capability: bounded
+    reads, PDF-page/DOCX-zip-bomb/extraction-timeout caps collapsing into one
+    generic `422`, input length limits, a body-size middleware, an
+    untrusted-content envelope + hardened prompt around retrieved document
+    text, a deterministic (non-LLM) system-prompt-leak check, and in-process
+    per-route rate limiting.
+25. `stage25_react_ui/` — a React + TypeScript SPA (upload/list, chat,
+    approval, execution trace) against Stage 24's exact contract, plus two
+    additive backend changes in `stages/stage25_react_ui/backend/main.py`:
+    `GET /documents` and a `trace` field on `ThreadStatusResponse`. No node,
+    edge, prompt, or tool changes. `app/` is the production port of this.
+
+Folder numbers drifted from the original roadmap: the web-fetch and PDF-fetch
+tools (4-5) were built by request ahead of planning, so planning landed at 6
+and human-in-the-loop at 7; likewise stages 12-14 sit one ahead of the project
+spec's own numbering (spec "Stage 11 — Specialist Agents" ->
+`stage12_two_specialist_agents`, and so on). Trust the folder names and
+`docs/PROGRESS.md`, not the spec numbering.
+
+Tools do not accumulate across stages — each stage binds only what it needs:
+Stage 2 -> `search_web`, Stage 3 -> `search_knowledge_base`, Stage 4 ->
+`fetch_webpage`, Stage 5 -> `fetch_pdf`, Stages 8 and 10 -> all four bound
+together, Stages 11-14 and 16-21 -> one tool per specialist (`search_web` /
+`search_knowledge_base`, plus `calculate` from Stage 15), Stages 22-25 ->
+`search_uploaded_documents` in place of `search_knowledge_base`. Stages 6, 7,
+9, 18, and 19 add no tool at all.
 
 ## Stage 1 pattern (reused going forward)
 
