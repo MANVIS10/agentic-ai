@@ -1,10 +1,10 @@
 import { createContext, useContext, useEffect, useRef, type ReactNode } from "react";
 import { useChat } from "../hooks/useChat";
 import { useDocuments } from "../hooks/useDocuments";
-import { useIdentity } from "../hooks/useIdentity";
+import { useAuth } from "../hooks/useAuth";
 
 interface AppContextValue {
-  identity: ReturnType<typeof useIdentity>;
+  auth: ReturnType<typeof useAuth>;
   documents: ReturnType<typeof useDocuments>;
   chat: ReturnType<typeof useChat>;
 }
@@ -12,27 +12,27 @@ interface AppContextValue {
 const AppContext = createContext<AppContextValue | null>(null);
 
 // The one place userId is read from for every API call (spec §9). Every
-// hook below is instantiated here, keyed off the same identity.userId, so
+// hook below is instantiated here, keyed off the same auth.userId, so
 // switching identity naturally clears and re-fetches everything downstream.
 export function AppProvider({ children }: { children: ReactNode }) {
-  const identity = useIdentity();
-  const documents = useDocuments(identity.userId);
-  const chat = useChat(identity.userId);
+  const auth = useAuth();
+  const documents = useDocuments(auth.userId);
+  const chat = useChat(auth.userId);
 
   // The document list (useDocuments) already resets/re-fetches on userId
   // change on its own. The chat thread doesn't naturally know about
   // identity changes, so it's reset explicitly here whenever the active
   // userId changes - never mixing two identities' data (spec §9).
-  const previousUserId = useRef(identity.userId);
+  const previousUserId = useRef(auth.userId);
   useEffect(() => {
-    if (previousUserId.current !== identity.userId) {
+    if (previousUserId.current !== auth.userId) {
       chat.newChat();
-      previousUserId.current = identity.userId;
+      previousUserId.current = auth.userId;
     }
-  }, [identity.userId, chat]);
+  }, [auth.userId, chat]);
 
   return (
-    <AppContext.Provider value={{ identity, documents, chat }}>{children}</AppContext.Provider>
+    <AppContext.Provider value={{ auth, documents, chat }}>{children}</AppContext.Provider>
   );
 }
 

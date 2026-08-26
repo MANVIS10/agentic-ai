@@ -62,3 +62,14 @@
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+.secondField {
+  margin-top: 0.5rem;
+}
+
+.error {
+  margin: 0.6rem 0 0;
+  font-size: 0.8rem;
+  color: var(--color-danger, #c0392b);
+  line-height: 1.4;
+}

@@ -6,10 +6,19 @@ import { IdentityPrompt } from "./components/common/IdentityPrompt";
 import { AppProvider, useAppContext } from "./state/AppContext";
 
 function AppShell() {
-  const { identity } = useAppContext();
+  const { auth } = useAppContext();
 
-  if (!identity.userId) {
-    return <IdentityPrompt onSubmit={identity.setUserId} />;
+  // Gate on the token, not the name: a persisted user_id with no valid token
+  // would mount a shell whose every request 401s.
+  if (!auth.token) {
+    return (
+      <IdentityPrompt
+        initialUserId={auth.userId}
+        pending={auth.status === "authenticating"}
+        error={auth.error}
+        onSubmit={auth.signIn}
+      />
+    );
   }
 
   return (

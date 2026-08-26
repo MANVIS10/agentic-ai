@@ -7,7 +7,7 @@ interface HeaderProps {
 }
 
 export function Header({ onToggleDocuments, onToggleTrace }: HeaderProps) {
-  const { identity } = useAppContext();
+  const { auth } = useAppContext();
 
   return (
     <header className={styles.header}>
@@ -19,18 +19,14 @@ export function Header({ onToggleDocuments, onToggleTrace }: HeaderProps) {
         <button className={styles.menuToggle} onClick={onToggleTrace} type="button">
           Trace
         </button>
-        {identity.userId && (
+        {auth.userId && (
           <span className={styles.identityBadge}>
             <span className={styles.dot} aria-hidden="true" />
-            {identity.userId}
+            {auth.userId}
           </span>
         )}
-        <button
-          className={styles.changeButton}
-          type="button"
-          onClick={() => identity.clearUserId()}
-        >
-          change
+        <button className={styles.changeButton} type="button" onClick={() => auth.signOut()}>
+          sign out
         </button>
       </div>
     </header>
