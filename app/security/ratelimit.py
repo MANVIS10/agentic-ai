@@ -25,14 +25,16 @@ not just one thread. The check itself is still pure in-memory bookkeeping
 (no actual I/O to await), so this is about not blocking the loop while
 holding the lock, not about any operation here being slow.
 
-Known, accepted limitation carried forward unfixed (Phase 3 territory, per
-this plan's constraints): `_rate_limit_state`'s key space is unbounded. A
-caller cycling through many distinct fake user_id/IP values grows this
-dict indefinitely, since nothing ever evicts a key. A production
-deployment would want an external, TTL-evicting store (Redis) for this.
+Eviction (Phase 3): a key whose window has closed can no longer affect any
+decision, so `_sweep` drops it. Sweeping is O(n) over the whole dict, so
+it runs only when at least one key has actually expired - see
+`_next_sweep_at`. A multi-replica deployment still wants an external,
+TTL-evicting store (Redis): this dict is per-process, so each replica
+tracks its own counts and the effective limit scales with replica count.
 """
 
 import asyncio
+import math
 import time
 
 from fastapi import HTTPException
@@ -45,13 +47,11 @@ from app.config import RATE_LIMIT_DETAIL
 _rate_limit_state: dict[str, tuple[float, list[float]]] = {}
 _rate_limit_guard = asyncio.Lock()
 
-# Sweep triggers on EITHER condition. The size threshold is what actually
-# defends against the abuse case - a caller cycling fake user_ids can add
-# thousands of keys well inside any time interval - while the interval keeps
-# a quiet process from holding dead keys indefinitely.
-_SWEEP_SIZE_THRESHOLD = 256
-_SWEEP_INTERVAL_SECONDS = 60.0
-_last_sweep = 0.0
+# The earliest monotonic time at which SOME key in the dict becomes dead.
+# Before it there is provably nothing to reclaim, so no scan can pay for
+# itself; at or after it, at least one key is collectable. Starts at
+# infinity because an empty dict has nothing to expire.
+_next_sweep_at = math.inf
 
 
 def _sweep(now: float) -> None:
@@ -64,12 +64,17 @@ def _sweep(now: float) -> None:
 
     Caller must hold _rate_limit_guard.
     """
-    global _last_sweep
-    _last_sweep = now
+    global _next_sweep_at
     for key in [
         k for k, (window, ts) in _rate_limit_state.items() if not ts or now - ts[-1] >= window
     ]:
         del _rate_limit_state[key]
+    # Whatever survived is live; the soonest of their deadlines is the next
+    # moment a scan could reclaim anything.
+    _next_sweep_at = min(
+        (ts[-1] + window for window, ts in _rate_limit_state.values() if ts),
+        default=math.inf,
+    )
 
 
 async def _enforce_rate_limit(key: str, max_requests: int, window_seconds: float) -> None:
@@ -79,16 +84,14 @@ async def _enforce_rate_limit(key: str, max_requests: int, window_seconds: float
     "ip:1.2.3.4") so the same underlying dict can track multiple
     independent limiter dimensions without them colliding.
     """
+    global _next_sweep_at
     now = time.monotonic()
     async with _rate_limit_guard:
         # Amortized eviction. Without it this dict's key space was unbounded:
         # user_id is self-asserted (Stage 23), so a caller rotating fake ids
         # grew it forever - a slow memory leak and a cheap DoS. Documented as
         # a known gap since Stage 24, fixed here without adding Redis.
-        if (
-            len(_rate_limit_state) > _SWEEP_SIZE_THRESHOLD
-            or now - _last_sweep > _SWEEP_INTERVAL_SECONDS
-        ):
+        if now >= _next_sweep_at:
             _sweep(now)
 
         _, previous = _rate_limit_state.get(key, (window_seconds, []))
@@ -97,6 +100,11 @@ async def _enforce_rate_limit(key: str, max_requests: int, window_seconds: float
             raise HTTPException(status_code=429, detail=RATE_LIMIT_DETAIL)
         timestamps.append(now)
         _rate_limit_state[key] = (window_seconds, timestamps)
+        # This key now dies at now + window_seconds. Refreshing an existing
+        # key only ever pushes its own deadline later, so a stale-early
+        # _next_sweep_at costs at most one scan that reclaims nothing and
+        # then recomputes the true deadline - it can never skip a dead key.
+        _next_sweep_at = min(_next_sweep_at, now + window_seconds)
 
 
 async def enforce_rate_limits(

@@ -62,6 +62,36 @@ async def test_rate_limit_state_does_not_grow_without_bound():
     )
 
 
+async def test_a_burst_of_live_keys_does_not_trigger_repeated_full_scans(monkeypatch):
+    """Sweeping is O(n) over the whole dict, so it must only run when there
+    is something dead to reclaim.
+
+    Every real window is 60s (app/config.py), so during a burst nothing has
+    expired yet and no sweep can free anything. Triggering on absolute size
+    meant the condition stayed true once crossed, and every subsequent
+    request paid a full scan that deleted nothing - the cost grows with the
+    key count exactly when the process is already under load.
+    """
+    import app.security.ratelimit as ratelimit
+
+    calls = 0
+    real_sweep = ratelimit._sweep
+
+    def counting_sweep(now):
+        nonlocal calls
+        calls += 1
+        real_sweep(now)
+
+    monkeypatch.setattr(ratelimit, "_sweep", counting_sweep)
+
+    _rate_limit_state.clear()
+    live = (10, 60)  # the real window: nothing expires during this test
+    for i in range(500):
+        await enforce_rate_limits("chat", f"burst-user-{i}", "2.2.2.2", live, (10_000, 60))
+
+    assert calls <= 1, f"{calls} full scans over a dict where nothing could be reclaimed"
+
+
 async def test_sweep_does_not_evict_a_live_window():
     """Eviction must not hand a throttled caller a fresh budget."""
     from app.security.ratelimit import _rate_limit_state, enforce_rate_limits
