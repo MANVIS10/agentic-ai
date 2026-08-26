@@ -62,14 +62,13 @@ export function useAuth() {
     return () => setUnauthorizedHandler(null);
   }, []);
 
-  const signIn = useCallback(async (nextUserId: string, secret: string) => {
+  const signIn = useCallback(async (nextUserId: string) => {
     const trimmed = nextUserId.trim();
-    if (!trimmed || !secret) return;
+    if (!trimmed) return;
     setStatus("authenticating");
     setError(null);
     try {
-      const response = await postToken(trimmed, secret);
-      // The phrase is used here and never stored. Only these two land.
+      const response = await postToken(trimmed);
       writeStored(USER_ID_STORAGE_KEY, trimmed);
       writeStored(TOKEN_STORAGE_KEY, response.access_token);
       setUserId(trimmed);
