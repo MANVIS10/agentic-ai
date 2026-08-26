@@ -38,6 +38,12 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
+# Hard ceiling on the ReAct executor loop (Phase 3A). reflect() may append
+# follow-up subtasks to its own agenda, so without a budget an ambiguous
+# question loops until the request times out. Roughly double a typical
+# 3-subtask plan, leaving room for follow-ups without letting it run away.
+MAX_REACT_STEPS = 6
+
 MAX_RETRIES = 1  # at most one retry per subtask - two specialist attempts total
 
 # Matches search_knowledge_base's existing k=3 - a fixed internal agent

@@ -1,6 +1,6 @@
 import inspect
 
-from app.graphs.planner import has_more_subtasks
+from app.graphs.planner import route_after_approval, route_from_decision
 from app.graphs.specialist import supervisor_critic_graph
 
 
@@ -16,12 +16,39 @@ def test_specialist_graph_topology_is_unchanged():
 
 
 def test_subtask_loop_advances_and_terminates():
-    assert has_more_subtasks({"subtasks": ["a", "b"], "current_index": 0}) == "research_subtask"
-    assert has_more_subtasks({"subtasks": ["a", "b"], "current_index": 2}) == "synthesize"
+    """Same property the pre-ReAct `has_more_subtasks` guarded: work
+    outstanding routes to the executor, no work routes to synthesis."""
+    assert route_from_decision({"agenda": ["a", "b"], "step_count": 0}) == "react_step"
+    assert route_from_decision({"agenda": [], "step_count": 2}) == "synthesize"
 
 
 def test_empty_plan_goes_straight_to_synthesize():
-    assert has_more_subtasks({"subtasks": [], "current_index": 0}) == "synthesize"
+    assert route_from_decision({"agenda": [], "step_count": 0}) == "synthesize"
+
+
+def test_rejected_plan_ends_without_researching():
+    """Rejection must reach END, never the executor - otherwise the approval
+    gate does nothing."""
+    from langgraph.graph import END
+
+    assert route_after_approval(
+        {"approved": False, "agenda": ["a"], "step_count": 0}
+    ) == END
+
+
+def test_approved_plan_enters_the_executor():
+    assert (
+        route_after_approval({"approved": True, "agenda": ["a"], "step_count": 0})
+        == "react_step"
+    )
+
+
+def test_planner_graph_wires_the_react_loop():
+    """act -> observe, then a decision edge back or on to synthesis."""
+    from app.graphs.planner import build_graph
+
+    nodes = set(build_graph(None).get_graph().nodes)
+    assert {"plan", "human_approval", "react_step", "reflect", "synthesize"} <= nodes
 
 
 def test_all_graph_nodes_are_coroutines():
@@ -34,7 +61,8 @@ def test_all_graph_nodes_are_coroutines():
     for fn in (
         planner.plan,
         planner.synthesize,
-        planner.research_subtask,
+        planner.react_step,
+        planner.reflect,
         supervisor.supervisor_node,
         critic.critic_node,
     ):

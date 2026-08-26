@@ -1,7 +1,7 @@
 """Phase 3A Task 2: a failing subtask must not destroy the whole run.
 
 Before this, an exception raised by a specialist or a tool propagated out of
-`supervisor_critic_graph.ainvoke()`, through `research_subtask`, out of the
+`supervisor_critic_graph.ainvoke()`, through `react_step`, out of the
 outer graph, and into the 500 handler - discarding every already-completed
 subtask's work despite the checkpointer. One flaky web search destroyed a
 three-subtask run.
@@ -32,8 +32,8 @@ async def test_successful_subtask_is_unaffected(monkeypatch):
         return _ok_result()
 
     monkeypatch.setattr(planner.supervisor_critic_graph, "ainvoke", fine)
-    out = await planner.research_subtask(
-        {"subtasks": ["a"], "current_index": 0, "user_id": "u", "results": [], "trace": []}
+    out = await planner.react_step(
+        {"subtasks": ["a"], "agenda": ["a"], "step_count": 0, "user_id": "u", "results": [], "trace": []}
     )
     assert out["trace"][0]["status"] == "completed"
     assert out["results"] == ["an answer"]
@@ -46,12 +46,13 @@ async def test_raising_specialist_becomes_a_recorded_failure(monkeypatch):
         raise RuntimeError("upstream exploded")
 
     monkeypatch.setattr(planner.supervisor_critic_graph, "ainvoke", boom)
-    out = await planner.research_subtask(
-        {"subtasks": ["a"], "current_index": 0, "user_id": "u", "results": [], "trace": []}
+    out = await planner.react_step(
+        {"subtasks": ["a"], "agenda": ["a"], "step_count": 0, "user_id": "u", "results": [], "trace": []}
     )
 
     assert out["trace"][0]["status"] == "failed"
-    assert out["current_index"] == 1, "the loop must still advance, or it spins forever"
+    assert out["agenda"] == [], "the item must be consumed, or the loop redispatches it forever"
+    assert out["step_count"] == 1, "a failed attempt must still spend its step"
     assert len(out["results"]) == 1, "a placeholder answer keeps subtasks and results aligned"
 
 
@@ -63,8 +64,8 @@ async def test_failure_never_leaks_exception_text(monkeypatch):
         raise RuntimeError("DATABASE_URL=postgresql://postgres:postgres@host/db")
 
     monkeypatch.setattr(planner.supervisor_critic_graph, "ainvoke", boom)
-    out = await planner.research_subtask(
-        {"subtasks": ["a"], "current_index": 0, "user_id": "u", "results": [], "trace": []}
+    out = await planner.react_step(
+        {"subtasks": ["a"], "agenda": ["a"], "step_count": 0, "user_id": "u", "results": [], "trace": []}
     )
 
     serialized = str(out)
@@ -89,6 +90,12 @@ async def test_synthesize_marks_failed_subtasks_for_the_llm(monkeypatch):
             "question": "q",
             "subtasks": ["a", "b"],
             "results": ["a real answer", planner.SUBTASK_FAILED_PLACEHOLDER],
+            # synthesize pairs results against TRACE, not subtasks - the loop
+            # can research a follow-up that was never in the approved plan.
+            "trace": [
+                planner.build_trace_entry("a", _ok_result()),
+                planner.build_failed_trace_entry("b"),
+            ],
         }
     )
     assert planner.SUBTASK_FAILED_PLACEHOLDER in captured["prompt"]
