@@ -12,7 +12,13 @@ from pydantic import BaseModel
 class ChatRequest(BaseModel):
     question: str
     thread_id: str
-    user_id: str
+    # Ignored - /chat takes its user_id from the bearer token (see
+    # app/security/auth.py's current_user_id). Optional rather than absent so
+    # a client still sending it keeps working; required would reject the
+    # frontend, which correctly stopped sending a field that decides nothing.
+    # Relaxing a required field is what test_schema_parity.py permits: new
+    # required must be a subset of old, since that can only accept more.
+    user_id: str | None = None
 
 
 class ApproveRequest(BaseModel):

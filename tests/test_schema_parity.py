@@ -53,6 +53,26 @@ def _allowed_values(spec: dict) -> set | None:
     return None
 
 
+def _is_nullable_widening(old_spec: dict, new_spec: dict) -> bool:
+    """True when `new_spec` is exactly `old_spec` made optional - anyOf[old, null].
+
+    This is a WIDENING, not a narrowing: a client still sending the old type
+    validates unchanged, and one omitting the field now succeeds where it used
+    to 400. That is the same direction as the `required` check below, which
+    already permits a required field becoming optional - this makes the
+    property comparison agree with it instead of rejecting the type change
+    that necessarily accompanies it.
+
+    Every other property difference is still a hard failure.
+    """
+    options = new_spec.get("anyOf")
+    if not options or len(options) != 2 or {"type": "null"} not in options:
+        return False
+    widened = next(option for option in options if option != {"type": "null"})
+    # `title` sits on the parent spec, not on the anyOf branches.
+    return widened == {key: value for key, value in old_spec.items() if key != "title"}
+
+
 def test_no_response_model_was_removed_or_narrowed(schemas):
     """Phase 1 asserted byte-equality here, which was exactly right when the
     only goal was proving a port changed nothing.
@@ -89,7 +109,7 @@ def test_no_response_model_was_removed_or_narrowed(schemas):
                     f"{name}.{prop}: allowed values narrowed "
                     f"{old_allowed} -> {new_allowed} - this breaks existing clients"
                 )
-            elif old_spec != new_spec:
+            elif old_spec != new_spec and not _is_nullable_widening(old_spec, new_spec):
                 raise AssertionError(f"{name}.{prop} changed: {old_spec} -> {new_spec}")
 
         # A field that was optional must not become required.
