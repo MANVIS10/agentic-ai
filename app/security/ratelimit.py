@@ -39,8 +39,37 @@ from fastapi import HTTPException
 
 from app.config import RATE_LIMIT_DETAIL
 
-_rate_limit_state: dict[str, list[float]] = {}
+# key -> (window_seconds, call timestamps). The window is stored per key so
+# the sweep below knows when that key's entry is genuinely dead; timestamps
+# alone can't tell a 2-second budget from a 60-second one.
+_rate_limit_state: dict[str, tuple[float, list[float]]] = {}
 _rate_limit_guard = asyncio.Lock()
+
+# Sweep triggers on EITHER condition. The size threshold is what actually
+# defends against the abuse case - a caller cycling fake user_ids can add
+# thousands of keys well inside any time interval - while the interval keeps
+# a quiet process from holding dead keys indefinitely.
+_SWEEP_SIZE_THRESHOLD = 256
+_SWEEP_INTERVAL_SECONDS = 60.0
+_last_sweep = 0.0
+
+
+def _sweep(now: float) -> None:
+    """Drops keys whose most recent call is older than that key's own window.
+
+    Such a key can no longer affect any decision: every timestamp in it would
+    be filtered out on the next read anyway. Keys with a live window are left
+    alone - evicting one would hand a throttled caller a fresh budget, which
+    is the one way this optimisation could become a security hole.
+
+    Caller must hold _rate_limit_guard.
+    """
+    global _last_sweep
+    _last_sweep = now
+    for key in [
+        k for k, (window, ts) in _rate_limit_state.items() if not ts or now - ts[-1] >= window
+    ]:
+        del _rate_limit_state[key]
 
 
 async def _enforce_rate_limit(key: str, max_requests: int, window_seconds: float) -> None:
@@ -52,11 +81,22 @@ async def _enforce_rate_limit(key: str, max_requests: int, window_seconds: float
     """
     now = time.monotonic()
     async with _rate_limit_guard:
-        timestamps = [t for t in _rate_limit_state.get(key, []) if now - t < window_seconds]
+        # Amortized eviction. Without it this dict's key space was unbounded:
+        # user_id is self-asserted (Stage 23), so a caller rotating fake ids
+        # grew it forever - a slow memory leak and a cheap DoS. Documented as
+        # a known gap since Stage 24, fixed here without adding Redis.
+        if (
+            len(_rate_limit_state) > _SWEEP_SIZE_THRESHOLD
+            or now - _last_sweep > _SWEEP_INTERVAL_SECONDS
+        ):
+            _sweep(now)
+
+        _, previous = _rate_limit_state.get(key, (window_seconds, []))
+        timestamps = [t for t in previous if now - t < window_seconds]
         if len(timestamps) >= max_requests:
             raise HTTPException(status_code=429, detail=RATE_LIMIT_DETAIL)
         timestamps.append(now)
-        _rate_limit_state[key] = timestamps
+        _rate_limit_state[key] = (window_seconds, timestamps)
 
 
 async def enforce_rate_limits(

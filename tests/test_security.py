@@ -42,6 +42,44 @@ async def test_rate_limit_window_slides():
     await enforce_rate_limits("slide", "u1", "9.9.9.9", limit, (1000, 0.3))
 
 
+async def test_rate_limit_state_does_not_grow_without_bound():
+    """A limiter keyed by self-asserted user_id must evict, or it is a slow
+    memory leak AND a trivial DoS: a caller cycling fake user_ids grows the
+    dict forever. Documented as a known gap since Stage 24; fixed here.
+    """
+    from app.security.ratelimit import _rate_limit_state, enforce_rate_limits
+
+    _rate_limit_state.clear()
+    tiny_window = (10, 0.05)
+    for i in range(500):
+        await enforce_rate_limits("chat", f"fake-user-{i}", "1.2.3.4", tiny_window, (10_000, 60))
+
+    await asyncio.sleep(0.1)  # every one of those windows is now expired
+    await enforce_rate_limits("chat", "trigger-sweep", "1.2.3.4", tiny_window, (10_000, 60))
+
+    assert len(_rate_limit_state) < 100, (
+        f"{len(_rate_limit_state)} stale keys retained - key space is unbounded"
+    )
+
+
+async def test_sweep_does_not_evict_a_live_window():
+    """Eviction must not hand a throttled caller a fresh budget."""
+    from app.security.ratelimit import _rate_limit_state, enforce_rate_limits
+
+    _rate_limit_state.clear()
+    live = (1, 60)  # a long, still-open window
+    await enforce_rate_limits("chat", "real-user", "5.5.5.5", live, (10_000, 60))
+
+    for i in range(300):  # churn enough short-window keys to trigger a sweep
+        await enforce_rate_limits("chat", f"churn-{i}", "5.5.5.5", (10, 0.01), (10_000, 60))
+    await asyncio.sleep(0.05)
+    await enforce_rate_limits("chat", "churn-final", "5.5.5.5", (10, 0.01), (10_000, 60))
+
+    with pytest.raises(HTTPException) as exc:
+        await enforce_rate_limits("chat", "real-user", "5.5.5.5", live, (10_000, 60))
+    assert exc.value.status_code == 429, "a live window was swept away"
+
+
 def test_blank_text_field_is_rejected():
     with pytest.raises(HTTPException):
         validate_text_field("   ", "question")
