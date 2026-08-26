@@ -16,7 +16,7 @@ const AppContext = createContext<AppContextValue | null>(null);
 // switching identity naturally clears and re-fetches everything downstream.
 export function AppProvider({ children }: { children: ReactNode }) {
   const auth = useAuth();
-  const documents = useDocuments(auth.userId);
+  const documents = useDocuments(auth.userId, auth.token);
   const chat = useChat(auth.userId);
 
   // The document list (useDocuments) already resets/re-fetches on userId
