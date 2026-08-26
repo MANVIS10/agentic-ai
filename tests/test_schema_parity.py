@@ -32,6 +32,59 @@ def test_same_routes_and_methods(schemas):
     assert new_routes == old_routes
 
 
-def test_same_response_models(schemas):
+def _allowed_values(spec: dict) -> set | None:
+    """The set of values a property accepts, or None if it isn't constrained.
+
+    Pydantic emits `const` for a single-value Literal and `enum` for a
+    multi-value one, so a widening changes the key too.
+    """
+    if "enum" in spec:
+        return set(spec["enum"])
+    if "const" in spec:
+        return {spec["const"]}
+    return None
+
+
+def test_no_response_model_was_removed_or_narrowed(schemas):
+    """Phase 1 asserted byte-equality here, which was exactly right when the
+    only goal was proving a port changed nothing.
+
+    Phase 3A deliberately makes ADDITIVE changes (SubtaskTrace.status gains
+    "needs_review"), so byte-equality now fails for a change that cannot
+    break a client. What still matters - and is still fully enforced below -
+    is that nothing was REMOVED or NARROWED: every original model still
+    exists, every original property still exists, and every original enum
+    value is still accepted. A client written against stage 25 keeps working.
+    """
     old, new = schemas
-    assert new["components"]["schemas"] == old["components"]["schemas"]
+    old_models, new_models = old["components"]["schemas"], new["components"]["schemas"]
+
+    assert set(old_models) <= set(new_models), (
+        f"models removed: {set(old_models) - set(new_models)}"
+    )
+
+    for name, old_model in old_models.items():
+        new_model = new_models[name]
+        old_props = old_model.get("properties", {})
+        new_props = new_model.get("properties", {})
+        assert set(old_props) <= set(new_props), (
+            f"{name}: properties removed: {set(old_props) - set(new_props)}"
+        )
+        for prop, old_spec in old_props.items():
+            new_spec = new_props[prop]
+            old_allowed, new_allowed = _allowed_values(old_spec), _allowed_values(new_spec)
+            if old_allowed is not None:
+                # A one-value Literal serializes as `const`, a multi-value one
+                # as `enum`, so widening changes the KEY as well as the values -
+                # compare normalized value sets, not raw specs.
+                assert new_allowed is not None and old_allowed <= new_allowed, (
+                    f"{name}.{prop}: allowed values narrowed "
+                    f"{old_allowed} -> {new_allowed} - this breaks existing clients"
+                )
+            elif old_spec != new_spec:
+                raise AssertionError(f"{name}.{prop} changed: {old_spec} -> {new_spec}")
+
+        # A field that was optional must not become required.
+        assert set(new_model.get("required", [])) <= set(old_model.get("required", [])), (
+            f"{name}: new required fields would reject existing valid requests"
+        )

@@ -33,7 +33,11 @@ class SubtaskTrace(BaseModel):
     subtask: str
     specialist: Literal["research", "knowledge", "analysis"]
     tools_used: list[str]
-    status: Literal["completed"]
+    # Widened in Phase 3A (was Literal["completed"]). "needs_review" means
+    # the critic never accepted the answer - the retry budget ran out and
+    # the last attempt was returned anyway. Additive: no field removed or
+    # renamed, and a passing subtask still serializes exactly as before.
+    status: Literal["completed", "needs_review"]
     verdict: Literal["pass", "retry"]
     retry_count: int
 

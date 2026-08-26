@@ -82,6 +82,32 @@ def route_after_approval(state: PlannerState) -> str:
     return has_more_subtasks(state)
 
 
+def build_trace_entry(subtask: str, result: dict) -> dict:
+    """One subtask's trace record (Stage 25 spec §3.2), derived from the
+    inner supervisor+critic graph's final state.
+
+    `status` is derived from the critic's verdict rather than hardcoded.
+    Phase 1 carried the original's literal `"completed"` forward for every
+    subtask, including one whose critic said "retry" and then exhausted
+    MAX_RETRIES without ever accepting the answer - so the UI reported a
+    clean pass for something the system had rejected. A verdict still
+    reading "retry" here means exactly that: the retry budget ran out,
+    the last attempt was returned anyway, and a human should look at it.
+
+    On a retry, the specialist node's return value (including tools_used)
+    is overwritten in CriticState before critic_node re-runs, the same way
+    verdict/next already work - so this entry reflects the final attempt.
+    """
+    return {
+        "subtask": subtask,
+        "specialist": result["next"],
+        "tools_used": result.get("tools_used", []),
+        "status": "completed" if result["verdict"] == "pass" else "needs_review",
+        "verdict": result["verdict"],
+        "retry_count": result["retry_count"],
+    }
+
+
 async def research_subtask(state: PlannerState):
     """Research one subtask by running it through the full
     supervisor -> specialist -> critic pipeline, instead of a bare LLM call
@@ -104,25 +130,7 @@ async def research_subtask(state: PlannerState):
 
     answer = result["messages"][-1].content
 
-    # New in Stage 25 (spec §3.2): record the same values just printed
-    # above into graph state instead of only printing them. On a retry,
-    # the specialist node's return value (including tools_used) is
-    # overwritten in CriticState before critic_node re-runs, the same way
-    # verdict/next already work - so this entry always reflects the
-    # attempt that ultimately passed.
-    trace_entry = {
-        "subtask": subtask,
-        "specialist": result["next"],
-        "tools_used": result.get("tools_used", []),
-        # Always "completed", even for a subtask whose critic verdict is
-        # "retry" that then exhausted MAX_RETRIES and fell through - this
-        # field doesn't currently distinguish that from a clean pass. A
-        # known limitation carried forward unfixed (Phase 3 territory, per
-        # this port's constraints), unchanged from the original.
-        "status": "completed",
-        "verdict": result["verdict"],
-        "retry_count": result["retry_count"],
-    }
+    trace_entry = build_trace_entry(subtask, result)
 
     return {
         "results": state["results"] + [answer],
