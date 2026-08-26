@@ -1,7 +1,8 @@
 """Ported from stages/stage25_react_ui/backend/test_react_ui_backend.py, converted
 from its assert+print script style into pytest functions. Per this port's
 Task 8: only the imports and the function wrappers changed (`from main
-import (...)` -> `from app.main import app` / `from app.db import
+import (...)` -> `from app.main import app
+from tests.conftest import auth_headers` / `from app.db import
 get_connection`, and each `run_*_check()` becomes a `test_*` function with
 its prints dropped since pytest reports failures on its own) - every
 assertion keeps its original expected value.
@@ -67,6 +68,7 @@ def upload(client, filename, content_bytes, user_id):
         "/documents/upload",
         files={"file": (filename, content_bytes, "text/plain")},
         data={"user_id": user_id},
+        headers=auth_headers(user_id),
     )
 
 
@@ -116,7 +118,7 @@ def test_list_documents_isolation(client):
     assert resp_a.status_code == 200, resp_a.text
     assert resp_b.status_code == 200, resp_b.text
 
-    listing_a = client.get("/documents", params={"user_id": USER_A})
+    listing_a = client.get("/documents", headers=auth_headers(USER_A))
     assert listing_a.status_code == 200
     body = listing_a.json()
     assert "documents" in body
@@ -136,16 +138,18 @@ def test_list_documents_empty_state(client):
     """A brand-new user_id with no uploads gets a 200 with an empty list,
     not an error (spec §4.6).
     """
-    response = client.get("/documents", params={"user_id": NEW_USER})
+    response = client.get("/documents", headers=auth_headers(NEW_USER))
     assert response.status_code == 200
     assert response.json() == {"documents": []}
 
 
-def test_list_documents_validation(client):
-    """Empty user_id -> 400, matching every other user_id-scoped route."""
-    response = client.get("/documents", params={"user_id": "   "})
-    assert response.status_code == 400
-    assert response.json()["detail"] == "user_id cannot be empty"
+def test_list_documents_requires_authentication(client):
+    """Replaces an empty-user_id -> 400 check. user_id is no longer a query
+    parameter a caller can leave blank; it comes from a signed token, so the
+    reachable failure is now 'no usable token' -> 401."""
+    assert client.get("/documents").status_code == 401
+    assert client.get("/documents", params={"user_id": "someone"}).status_code == 401
+    assert client.get("/documents", headers={"Authorization": "Bearer forged"}).status_code == 401
 
 
 # ---------------------------------------------------------------------------
@@ -178,12 +182,15 @@ def test_trace_knowledge_question(client):
             "thread_id": thread_id,
             "user_id": USER_A,
         },
+        headers=auth_headers(USER_A),
     )
     assert chat_resp.status_code == 200, chat_resp.text
     assert chat_resp.json()["status"] == "awaiting_approval"
     assert chat_resp.json()["trace"] is None
 
-    approve_resp = client.post("/approve", json={"thread_id": thread_id})
+    approve_resp = client.post(
+        "/approve", json={"thread_id": thread_id}, headers=auth_headers(USER_A)
+    )
     assert approve_resp.status_code == 200, approve_resp.text
     body = approve_resp.json()
     assert body["status"] == "completed"
@@ -216,10 +223,13 @@ def test_trace_reject(client):
     chat_resp = client.post(
         "/chat",
         json={"question": "What is 2 + 2?", "thread_id": thread_id, "user_id": USER_A},
+        headers=auth_headers(USER_A),
     )
     assert chat_resp.status_code == 200, chat_resp.text
 
-    reject_resp = client.post("/reject", json={"thread_id": thread_id})
+    reject_resp = client.post(
+        "/reject", json={"thread_id": thread_id}, headers=auth_headers(USER_A)
+    )
     assert reject_resp.status_code == 200, reject_resp.text
     body = reject_resp.json()
     assert body["status"] == "rejected"
@@ -236,9 +246,12 @@ def test_trace_excludes_sensitive_data(client):
     chat_resp = client.post(
         "/chat",
         json={"question": "What is 5 * 5?", "thread_id": thread_id, "user_id": USER_A},
+        headers=auth_headers(USER_A),
     )
     assert chat_resp.status_code == 200, chat_resp.text
-    approve_resp = client.post("/approve", json={"thread_id": thread_id})
+    approve_resp = client.post(
+        "/approve", json={"thread_id": thread_id}, headers=auth_headers(USER_A)
+    )
     assert approve_resp.status_code == 200, approve_resp.text
 
     body_text = approve_resp.text

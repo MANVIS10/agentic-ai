@@ -25,11 +25,19 @@ def schemas(pg_available):
     return _load_original().openapi(), new_app.openapi()
 
 
-def test_same_routes_and_methods(schemas):
+def test_no_original_route_was_removed(schemas):
+    """Phase 1 asserted the two route sets were EQUAL, which was exactly
+    right when the only goal was proving a port changed nothing.
+
+    Adding authentication adds POST /auth/token, so equality now fails for a
+    route that no stage 25 client ever called. The property still worth
+    enforcing - and still enforced here - is that no original route
+    disappeared or lost a method.
+    """
     old, new = schemas
     old_routes = {(p, m) for p, ops in old["paths"].items() for m in ops}
     new_routes = {(p, m) for p, ops in new["paths"].items() for m in ops}
-    assert new_routes == old_routes
+    assert old_routes <= new_routes, f"routes removed: {old_routes - new_routes}"
 
 
 def _allowed_values(spec: dict) -> set | None:

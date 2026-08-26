@@ -207,3 +207,24 @@ SEARCH_USER_RATE_LIMIT = (20, 60)
 SEARCH_IP_RATE_LIMIT = (60, 60)
 LIST_USER_RATE_LIMIT = (30, 60)  # new in Stage 25 (spec §3.1), GET /documents
 LIST_IP_RATE_LIMIT = (90, 60)
+
+# Token issuance is the one route where a brute-force attempt is the whole
+# threat: the signup/admin secrets are the only things standing between a
+# stranger and a token for any user_id. Limited per client IP (there is no
+# authenticated user_id yet at that point, by definition) and deliberately
+# tighter than any other route's budget.
+AUTH_IP_RATE_LIMIT = (10, 60)
+
+# How many unembedded chunks /documents/backfill-embeddings pulls per round
+# trip. The route used to SELECT every NULL-embedding row's id AND content
+# in one query before embedding any of them; batching bounds that allocation
+# without changing the endpoint's resumable "only ever touches rows still
+# NULL" behavior.
+BACKFILL_BATCH_SIZE = 100
+
+# How long GET /health waits for the database before reporting it down.
+# The connection pool's own default wait is tens of seconds, which turns an
+# unreachable database into a HANGING health check rather than a failing
+# one - and a hosting platform reading that as a timeout learns less than it
+# would from a prompt 503.
+HEALTH_DB_TIMEOUT_SECONDS = 5.0

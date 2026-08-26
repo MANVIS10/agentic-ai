@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.middleware import limit_json_body_size, unhandled_exception_handler
 from app.api.routers import chat as chat_router
+from app.api.routers.auth import router as auth_routes
 from app.api.routers.chat import router as chat_routes
 from app.api.routers.documents import router as documents_routes
 from app.api.routers.health import router as health_routes
@@ -63,13 +64,17 @@ def create_app() -> FastAPI:
         allow_origins=settings.allowed_origins,
         allow_credentials=False,
         allow_methods=["GET", "POST"],
-        allow_headers=["Content-Type"],
+        # Authorization joins the list now that every user-scoped route
+        # authenticates - a browser preflight omitting it would block the
+        # real request before any route ran.
+        allow_headers=["Content-Type", "Authorization"],
     )
 
     app.middleware("http")(limit_json_body_size)
     app.exception_handler(Exception)(unhandled_exception_handler)
 
     app.include_router(health_routes)
+    app.include_router(auth_routes)
     app.include_router(chat_routes)
     app.include_router(documents_routes)
 

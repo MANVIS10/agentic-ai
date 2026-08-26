@@ -26,9 +26,10 @@ CPU-bound extraction via `asyncio.to_thread` + `asyncio.wait_for` rather
 than a raw ThreadPoolExecutor.
 """
 
+import logging
 import uuid
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pgvector import Vector
 
 from app.api.schemas import (
@@ -41,6 +42,7 @@ from app.api.schemas import (
     UploadResponse,
 )
 from app.config import (
+    BACKFILL_BATCH_SIZE,
     CORRUPT_FILE_DETAIL,
     EXTRACTION_TIMEOUT_SECONDS,
     LIST_IP_RATE_LIMIT,
@@ -55,11 +57,14 @@ from app.config import (
     UPLOAD_USER_RATE_LIMIT,
 )
 from app.db import connection
+from app.security.auth import current_user_id, require_admin
 from app.ingestion.extract import extract_text_with_timeout, get_file_type
 from app.ingestion.store import chunk_text, embed_and_store
 from app.llm import embeddings
 from app.security.ratelimit import enforce_rate_limits
 from app.security.validation import validate_text_field
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -67,7 +72,10 @@ UNSUPPORTED_TYPE_DETAIL = "Unsupported file type. Allowed types: pdf, txt, docx"
 
 
 @router.get("/documents", response_model=DocumentListResponse)
-async def list_documents(user_id: str, http_request: Request):
+async def list_documents(
+    http_request: Request,
+    user_id: str = Depends(current_user_id),
+):
     """List documents belonging to user_id, most recently uploaded first
     (spec §3.1, confirmed addition). Same WHERE user_id = %s isolation
     filter Stage 23 already applies on every other retrieval path, same
@@ -75,9 +83,11 @@ async def list_documents(user_id: str, http_request: Request):
     user_id-scoped route already uses. A read-only query against an
     existing table - not a new capability. An empty list is a valid 200,
     not an error.
-    """
-    user_id = validate_text_field(user_id, "user_id")
 
+    `user_id` now comes from the bearer token rather than a query string, so
+    the WHERE clause below finally filters on an identity the server
+    established instead of one the caller asserted.
+    """
     client_ip = http_request.client.host if http_request.client else "unknown"
     await enforce_rate_limits(
         "list", user_id, client_ip, LIST_USER_RATE_LIMIT, LIST_IP_RATE_LIMIT
@@ -107,7 +117,12 @@ async def list_documents(user_id: str, http_request: Request):
 
 @router.post("/documents/upload", response_model=UploadResponse)
 async def upload_document(
-    http_request: Request, file: UploadFile = File(...), user_id: str = Form(...)
+    http_request: Request,
+    file: UploadFile = File(...),
+    # Still accepted so the current frontend keeps working during migration,
+    # and deliberately ignored - ownership comes from the token below.
+    user_id_form: str | None = Form(default=None, alias="user_id"),
+    user_id: str = Depends(current_user_id),
 ):
     """Validate, extract, chunk, embed, and durably store an uploaded
     PDF/TXT/DOCX file, owned by the given user_id.
@@ -120,7 +135,6 @@ async def upload_document(
     detail string on every HTTPException, the real exception printed
     server-side, never echoed to the client.
     """
-    user_id = validate_text_field(user_id, "user_id")
 
     client_ip = http_request.client.host if http_request.client else "unknown"
     await enforce_rate_limits(
@@ -210,47 +224,73 @@ async def upload_document(
 
 
 @router.post("/documents/backfill-embeddings", response_model=BackfillResponse)
-async def backfill_embeddings():
+async def backfill_embeddings(_admin: str = Depends(require_admin)):
     """Embed every document_chunks row with embedding IS NULL - rows
     written before pgvector existed, or leftovers from a previous partial
-    backfill run. Deliberately NOT user-scoped and NOT rate-limited
-    (unchanged from Stage 21-23): it's a maintenance operation whose
-    response (BackfillResponse) contains only counts, never chunk content
-    or filenames, and it's naturally self-throttling - after the first
-    call embeds every NULL row, repeat calls do no additional work.
+    backfill run. Not user-scoped, by nature: it repairs rows across every
+    tenant, which is precisely why it now requires an ADMIN-scoped token
+    (app/security/auth.py). Until this phase it required nothing at all -
+    an unauthenticated stranger could make the server embed every unembedded
+    chunk in the database, spending the OpenAI budget at will.
 
     Each chunk is embedded and UPDATEd independently (one call per chunk,
     not one giant batch), each in its own try/except: one bad chunk never
     blocks the rest, every successful UPDATE commits immediately on this
     autocommit connection, and a retry of this endpoint only ever touches
     rows still NULL - it's naturally resumable without any extra state.
-    """
-    async with connection() as conn:
-        rows = await (
-            await conn.execute("SELECT id, content FROM document_chunks WHERE embedding IS NULL")
-        ).fetchall()
 
-        embedded_count = 0
-        failed_count = 0
-        for chunk_id, content in rows:
-            try:
-                chunk_embedding = (await embeddings.aembed_documents([content]))[0]
+    Read in batches rather than one unbounded SELECT. The old query
+    materialized every NULL-embedding row - id AND content - into memory at
+    once before embedding any of them; on a database with a real backlog
+    that is a large allocation held for the whole run. Since each successful
+    UPDATE removes its row from the `embedding IS NULL` set, re-running the
+    same LIMITed query walks the backlog without an OFFSET. Rows that FAIL
+    stay NULL, so the loop skips past them by remembering how many failures
+    it has seen and offsetting by exactly that - otherwise a single
+    permanently-bad chunk would be re-fetched forever.
+    """
+    embedded_count = 0
+    failed_count = 0
+    chunks_found = 0
+
+    async with connection() as conn:
+        while True:
+            rows = await (
                 await conn.execute(
-                    "UPDATE document_chunks SET embedding = %s WHERE id = %s",
-                    (Vector(chunk_embedding), chunk_id),
+                    "SELECT id, content FROM document_chunks WHERE embedding IS NULL "
+                    "ORDER BY id LIMIT %s OFFSET %s",
+                    (BACKFILL_BATCH_SIZE, failed_count),
                 )
-                embedded_count += 1
-            except Exception as exc:
-                print(f"[/documents/backfill-embeddings] Failed to embed chunk {chunk_id}: {exc}")
-                failed_count += 1
+            ).fetchall()
+            if not rows:
+                break
+            chunks_found += len(rows)
+
+            for chunk_id, content in rows:
+                try:
+                    chunk_embedding = (await embeddings.aembed_documents([content]))[0]
+                    await conn.execute(
+                        "UPDATE document_chunks SET embedding = %s WHERE id = %s",
+                        (Vector(chunk_embedding), chunk_id),
+                    )
+                    embedded_count += 1
+                except Exception:
+                    logger.exception(
+                        "[/documents/backfill-embeddings] Failed to embed chunk %s", chunk_id
+                    )
+                    failed_count += 1
 
     return BackfillResponse(
-        chunks_found=len(rows), embedded_count=embedded_count, failed_count=failed_count
+        chunks_found=chunks_found, embedded_count=embedded_count, failed_count=failed_count
     )
 
 
 @router.post("/documents/search", response_model=SearchResponse)
-async def search_documents(request: SearchRequest, http_request: Request):
+async def search_documents(
+    request: SearchRequest,
+    http_request: Request,
+    user_id: str = Depends(current_user_id),
+):
     """Semantic similarity search over embedded document_chunks, scoped to
     the requesting user_id. Kept for direct testing/inspection of the
     search layer, independent of the Knowledge Agent's own tool
@@ -270,7 +310,6 @@ async def search_documents(request: SearchRequest, http_request: Request):
     existing lower bound, plus rate limiting - all checked before the
     embedding call/DB query run.
     """
-    user_id = validate_text_field(request.user_id, "user_id")
 
     client_ip = http_request.client.host if http_request.client else "unknown"
     await enforce_rate_limits(

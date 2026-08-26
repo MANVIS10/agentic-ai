@@ -65,3 +65,17 @@ def reset_rate_limiter():
     _rate_limit_state.clear()
     yield
     _rate_limit_state.clear()
+
+
+def auth_headers(user_id: str, scope: str = "user") -> dict[str, str]:
+    """Authorization header for a test caller.
+
+    Every user_id-scoped route now derives its user_id from a signed token
+    rather than the request body, so tests mint one the same way the server
+    would. Calling issue_token directly (instead of going through
+    POST /auth/token) keeps these tests independent of the signup secret's
+    configuration, which differs between a developer's .env and CI.
+    """
+    from app.security.auth import issue_token
+
+    return {"Authorization": f"Bearer {issue_token(user_id, scope=scope)}"}

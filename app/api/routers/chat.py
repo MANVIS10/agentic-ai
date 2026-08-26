@@ -10,7 +10,7 @@ handler hands this router the compiled graph, without changing any route's
 signature or behavior.
 """
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from langgraph.types import Command
 
 from app.api.schemas import (
@@ -21,6 +21,7 @@ from app.api.schemas import (
     ThreadStatusResponse,
 )
 from app.config import CHAT_IP_RATE_LIMIT, CHAT_USER_RATE_LIMIT, MAX_TEXT_INPUT_LENGTH
+from app.security.auth import current_user_id
 from app.security.locks import thread_lock
 from app.security.ratelimit import enforce_rate_limits
 from app.security.validation import validate_text_field
@@ -39,7 +40,11 @@ def set_graph(graph) -> None:
 
 
 @router.post("/chat", response_model=ThreadStatusResponse)
-async def chat(request: ChatRequest, http_request: Request):
+async def chat(
+    request: ChatRequest,
+    http_request: Request,
+    user_id: str = Depends(current_user_id),
+):
     """Start (or restart) a research question on the given thread_id.
 
     New in this stage: `question` and `thread_id` are now validated
@@ -57,7 +62,6 @@ async def chat(request: ChatRequest, http_request: Request):
     same thread_id must not be able to read Postgres until the checkpoint
     this call is about to write has actually committed.
     """
-    user_id = validate_text_field(request.user_id, "user_id")
     question = validate_text_field(
         request.question, "question", max_length=MAX_TEXT_INPUT_LENGTH
     )
@@ -103,18 +107,25 @@ async def chat(request: ChatRequest, http_request: Request):
         )
 
 
-async def _require_pending_approval(thread_id: str):
+async def _require_pending_approval(thread_id: str, user_id: str):
     """Shared validation for /approve and /reject: confirm this thread_id
-    actually exists and is currently paused at human_approval before
-    calling Command(resume=...) on it. graph.invoke()'s return value alone
-    can't answer this anymore, since the approval decision now arrives as
-    its own separate request instead of the same call that produced the
-    interrupt.
+    actually exists, belongs to the authenticated caller, and is currently
+    paused at human_approval before calling Command(resume=...) on it.
+    graph.invoke()'s return value alone can't answer this anymore, since the
+    approval decision now arrives as its own separate request instead of the
+    same call that produced the interrupt.
+
+    Ownership: a thread carries the user_id that started it (plan() receives
+    it as graph input and it lives in PlannerState). A thread owned by
+    someone else returns the SAME 404 as one that does not exist - never a
+    distinct status or message - so this endpoint can't be used to probe
+    which thread_ids are real. That is the convention /documents/search
+    already follows for a foreign document_id.
     """
     config = {"configurable": {"thread_id": thread_id}}
     state = await _graph.aget_state(config)
 
-    if not state.values:
+    if not state.values or state.values.get("user_id") != user_id:
         raise HTTPException(
             status_code=404, detail="No conversation found for this thread_id"
         )
@@ -126,7 +137,7 @@ async def _require_pending_approval(thread_id: str):
 
 
 @router.post("/approve", response_model=ThreadStatusResponse)
-async def approve(request: ApproveRequest):
+async def approve(request: ApproveRequest, user_id: str = Depends(current_user_id)):
     """Resume a paused thread with an approval, running
     research_subtask (looped over every subtask) -> synthesize -> END.
 
@@ -142,7 +153,7 @@ async def approve(request: ApproveRequest):
     wait and then see this call's result rather than racing it.
     """
     async with thread_lock(request.thread_id):
-        config = await _require_pending_approval(request.thread_id)
+        config = await _require_pending_approval(request.thread_id, user_id)
 
         try:
             result = await _graph.ainvoke(Command(resume="y"), config=config)
@@ -164,7 +175,7 @@ async def approve(request: ApproveRequest):
 
 
 @router.post("/reject", response_model=ThreadStatusResponse)
-async def reject(request: RejectRequest):
+async def reject(request: RejectRequest, user_id: str = Depends(current_user_id)):
     """Resume a paused thread with a rejection. route_after_approval sends
     this straight to END - no special-case handling needed here, results
     stays [] and final_answer stays "" since no research ever ran.
@@ -174,7 +185,7 @@ async def reject(request: RejectRequest):
     /approve is too.
     """
     async with thread_lock(request.thread_id):
-        config = await _require_pending_approval(request.thread_id)
+        config = await _require_pending_approval(request.thread_id, user_id)
 
         try:
             result = await _graph.ainvoke(Command(resume="n"), config=config)

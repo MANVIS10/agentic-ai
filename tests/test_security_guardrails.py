@@ -66,6 +66,7 @@ from app.config import (
 )
 from app.graphs.specialist import knowledge_node
 from app.main import app
+from tests.conftest import auth_headers
 from app.security.leakguard import leaks_system_prompt
 from app.tools.document_search import search_uploaded_documents
 
@@ -129,12 +130,13 @@ def upload(client, filename, content_bytes, user_id, content_type="text/plain"):
         "/documents/upload",
         files={"file": (filename, content_bytes, content_type)},
         data={"user_id": user_id},
+        headers=auth_headers(user_id),
     )
 
 
 def search(client, query, user_id, **kwargs):
     body = {"query": query, "user_id": user_id, **kwargs}
-    return client.post("/documents/search", json=body)
+    return client.post("/documents/search", json=body, headers=auth_headers(user_id))
 
 
 def get_document_row_by_filename(filename):
@@ -340,6 +342,7 @@ def test_chat_input_validation(client):
     empty_question = client.post(
         "/chat",
         json={"question": "   ", "thread_id": f"secguard-empty-q-{RUN_ID}", "user_id": "tester"},
+        headers=auth_headers("tester"),
     )
     overlong_question = client.post(
         "/chat",
@@ -348,9 +351,12 @@ def test_chat_input_validation(client):
             "thread_id": f"secguard-long-q-{RUN_ID}",
             "user_id": "tester",
         },
+        headers=auth_headers("tester"),
     )
     empty_thread_id = client.post(
-        "/chat", json={"question": "hi", "thread_id": "   ", "user_id": "tester"}
+        "/chat",
+        json={"question": "hi", "thread_id": "   ", "user_id": "tester"},
+        headers=auth_headers("tester"),
     )
 
     assert empty_question.status_code == 400
@@ -393,6 +399,7 @@ def test_oversized_json_body(client):
     response = client.post(
         "/chat",
         json={"question": huge_question, "thread_id": f"secguard-huge-{RUN_ID}", "user_id": "tester"},
+        headers=auth_headers("tester"),
     )
     assert response.status_code == 413
     assert response.json()["detail"] == "Request body is too large"
@@ -587,7 +594,11 @@ def test_error_hygiene(client):
             "filename is too long",
         ),
         (
-            client.post("/chat", json={"question": "  ", "thread_id": "t", "user_id": "u"}),
+            client.post(
+                "/chat",
+                json={"question": "  ", "thread_id": "t", "user_id": "u"},
+                headers=auth_headers("u"),
+            ),
             "question cannot be empty",
         ),
         (search(client, "q", "tester", top_k=MAX_TOP_K + 1), f"top_k must be at most {MAX_TOP_K}"),
