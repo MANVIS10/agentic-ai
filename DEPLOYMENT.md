@@ -74,6 +74,14 @@ and embeddings over the network in the clear.
 6. Set the environment variables below, then deploy and note the service URL
    (`https://<name>.onrender.com`).
 
+> **Dockerfile alternative.** The repo root now has a `Dockerfile`, so Render
+> can be pointed at its **Docker** runtime instead of the Python buildpack —
+> select Docker as the language and leave the build and start commands blank
+> (the image's own `CMD` already binds `0.0.0.0:$PORT`). The buildpack path
+> above still works and stays the documented default; the image mainly earns
+> its keep locally, where it pins the Python version and reproduces the
+> runtime exactly. Environment variables are set the same way either way.
+
 Free web services sleep after ~15 minutes idle and take roughly a minute to
 wake, so the first request after a quiet period is slow â€” 60s cold starts are
 normal, not a fault. Everything downstream (the blocking `/approve` call) is
@@ -165,6 +173,40 @@ matching the other service's real URL.
 A transient `"Database unavailable"` from `/health` right after a redeploy is
 usually Neon's compute waking from auto-suspend; retry a few seconds later
 before treating it as a misconfiguration.
+
+## Running the whole stack locally (Docker)
+
+Nothing here is required to deploy — this is the container equivalent of the
+`uvicorn` workflow in CLAUDE.md, useful for reproducing the runtime exactly
+or checking a change against a clean Python 3.13 environment.
+
+```bash
+# Postgres only — the default, and still what the CLAUDE.md workflow expects
+# (run uvicorn on the host afterwards).
+docker compose up -d
+
+# Postgres + the backend in a container, on http://localhost:8000
+docker compose --profile app up -d --build
+
+docker compose logs -f backend
+docker compose --profile app down
+```
+
+The backend sits behind a Compose **profile** on purpose: `docker compose up
+-d` must keep starting only the database, or it would bind host port 8000 and
+break the documented `uvicorn app.main:app --port 8000` step.
+
+Two details worth knowing:
+
+- **`DATABASE_URL` is overridden in `docker-compose.yml`.** The default
+  `DEV_DATABASE_URL` points at `localhost:5433`, and inside a container
+  `localhost` is the container itself. On the Compose network the database is
+  `postgres:5432` — the internal port, not the `5433` host mapping.
+- **`.env` supplies `OPENAI_API_KEY`, and nothing else is needed.** The stack
+  runs with `ENVIRONMENT=dev`, so the prod-only requirements (a real
+  `AUTH_SECRET_KEY`, `AUTH_SIGNUP_SECRET`, TLS on the database) do not apply.
+  `.dockerignore` keeps `.env` out of the image; the key reaches the
+  container through Compose's `env_file`, not baked into a layer.
 
 ## Migrating an existing deployment
 

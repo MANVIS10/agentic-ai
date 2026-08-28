@@ -14,6 +14,62 @@ services:
       - "5433:5432"
     volumes:
       - langgraph_postgres_data:/var/lib/postgresql/data
+    # Added so `backend` can wait for a database that is genuinely ready to
+    # accept queries. Without it `depends_on` only waits for the container to
+    # START, and Postgres's first boot runs initdb after that point - so the
+    # backend's init_schema() could open a connection to a server still
+    # bringing itself up and fail on the very first `docker compose up`.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # The FastAPI + LangGraph backend, built from the repo-root Dockerfile.
+  #
+  # Behind a PROFILE, so it does not start by default:
+  #
+  #   docker compose up -d                  # postgres only (unchanged)
+  #   docker compose --profile app up -d    # postgres + backend
+  #
+  # The default has to stay postgres-only because CLAUDE.md's documented
+  # local workflow is `docker compose up -d` followed by `uvicorn app.main:app
+  # --port 8000` on the HOST. Starting this service unconditionally would
+  # bind host port 8000 first and make that uvicorn line fail with an
+  # address-already-in-use error - breaking the everyday workflow to add an
+  # occasional one.
+  backend:
+    profiles: ["app"]
+    build: .
+    container_name: langgraph_backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Supplies OPENAI_API_KEY, which app/config.py's validate_for_startup()
+    # requires in every environment. Anything else set there (a prod
+    # DATABASE_URL, say) is deliberately overridden below.
+    env_file:
+      - .env
+    environment:
+      # MUST override whatever .env says. The default DEV_DATABASE_URL points
+      # at localhost:5433, and "localhost" inside this container is the
+      # container itself, not the host - so the app would look for Postgres
+      # in its own network namespace and find nothing. On the compose network
+      # the database is reachable by service name on its INTERNAL port 5432;
+      # 5433 is only the host-side mapping above.
+      #
+      # `environment:` wins over `env_file:` in Compose, which is what makes
+      # this override reliable rather than dependent on key ordering.
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/postgres?sslmode=disable
+      # Stays dev on purpose: sslmode=disable and an ephemeral auth key are
+      # both fine on a private compose network and both refused by
+      # validate_for_startup() under ENVIRONMENT=prod. This file describes a
+      # local stack, not a deployment.
+      ENVIRONMENT: dev
+    ports:
+      - "8000:8000"
 
 volumes:
   langgraph_postgres_data:

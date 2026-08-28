@@ -1,0 +1,38 @@
+# Everything the build context does not need. Without this file the whole
+# repo is uploaded to the daemon on every build - including .venv (hundreds
+# of MB) and .env (real credentials, which would then be readable in the
+# image even though the COPY lines below never name it).
+
+# Secrets. The container gets its configuration from the environment
+# (--env-file, or the platform's variable settings), never from a baked-in
+# file. Note that app/config.py's `env_file=".env"` simply finds nothing
+# inside the image, which is the intended behaviour.
+.env
+.env.*
+!.env.example
+
+# Local Python environment and caches
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Not part of the backend image
+frontend/
+stages/
+tests/
+docs/
+.claude/
+.github/
+
+# Version control and editor state
+.git/
+.gitignore
+*.md
+!README.md
+
+# Compose file describes the local Postgres dependency, not this image
+docker-compose.yml
