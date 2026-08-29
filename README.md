@@ -6,6 +6,7 @@
 
 [**Live demo →**](https://agentic-ai-theta-seven.vercel.app)
 
+[![CI](https://github.com/MANVIS10/agentic-ai/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/MANVIS10/agentic-ai/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white)
 ![LangGraph](https://img.shields.io/badge/LangGraph-StateGraph-1C3C3C)
 ![FastAPI](https://img.shields.io/badge/FastAPI-async-009688?logo=fastapi&logoColor=white)
