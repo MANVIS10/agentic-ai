@@ -71,6 +71,30 @@ analysis_llm = ChatOpenAI(
 )
 
 
+class Intent(TypedDict):
+    """What the incoming /chat message actually is.
+
+    One call does double duty: the branch decision AND the name, because
+    "hi, I'm Manvi" carries both and a second extraction call would be
+    paying twice for the same sentence. `user_name` is "" whenever the
+    message introduces nobody - the overwhelmingly common case.
+    """
+
+    kind: Literal["chat", "research"]
+    user_name: str
+
+
+# A decision, so it pins llm_decision_temperature like every client below
+# rather than following chat_llm's deliberate freedom. method="function_calling"
+# for the same gpt-4o-mini reason documented on supervisor_llm.
+intent_llm = ChatOpenAI(
+    model=settings.openai_chat_model,
+    request_timeout=settings.llm_request_timeout_seconds,
+    max_retries=settings.llm_max_retries,
+    temperature=settings.llm_decision_temperature,
+).with_structured_output(Intent, method="function_calling")
+
+
 class Route(TypedDict):
     """The supervisor's routing decision."""
 

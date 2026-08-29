@@ -17,12 +17,17 @@ from typing_extensions import TypedDict
 
 from app.config import MAX_REACT_STEPS
 from app.graphs.specialist import supervisor_critic_graph
-from app.llm import chat_llm
+from app.llm import chat_llm, intent_llm
 
 
 class PlannerState(TypedDict):
     question: str
     user_id: str
+    intent: str  # "chat" | "research", decided by classify() - which of the
+    # two branches out of START this turn took
+    user_name: str  # what the user called themselves, if they ever said;
+    # belongs to the conversation rather than the turn, so plan() must NOT
+    # reset it the way it resets everything else
     subtasks: list[str]  # the plan the human approved - never mutated after
     # approval, so the API keeps reporting what was actually sanctioned
     agenda: list[str]  # work still outstanding; seeded from subtasks, and
@@ -36,6 +41,98 @@ class PlannerState(TypedDict):
     # completed subtask (plain dicts, not SubtaskTrace - that stays a
     # pure HTTP-layer response type, matching how graph state elsewhere
     # in this file is always a TypedDict/plain dict, never a BaseModel)
+
+
+CLASSIFY_PROMPT = (
+    "Decide what this message to a research assistant is.\n\n"
+    '"chat" - a greeting, an introduction ("I\'m Manvi"), thanks, small '
+    "talk, or a question about the assistant itself and what it can do.\n"
+    '"research" - anything the assistant would have to look something up, '
+    "read a document, or calculate in order to answer.\n\n"
+    "If you are not sure, answer research.\n\n"
+    "Also extract the name the user gives for THEMSELVES, if any. If the "
+    "message introduces nobody, return an empty string - do not guess, and "
+    "never return a name that is merely mentioned as a topic.\n\n"
+    "Message: {question}"
+)
+
+
+async def classify(state: PlannerState):
+    """Decide which branch out of START this turn takes, and pick up the
+    user's name while we are already looking at the sentence.
+
+    Before this node existed, "I'm Manvi" went straight to plan(), which
+    dutifully invented 2-3 research subtasks about Manvi and asked the human
+    to approve a plan they never asked for.
+
+    The name is carried forward when this message doesn't repeat it: a
+    conversation learns it once ("I'm Manvi") and the next message ("what's
+    in my PDF?") must not erase it.
+    """
+    intent = await intent_llm.ainvoke(CLASSIFY_PROMPT.format(question=state["question"]))
+    name = (intent.get("user_name") or "").strip()
+
+    print(f"\nIntent: {intent.get('kind')}" + (f" (name: {name})" if name else ""))
+
+    return {
+        "intent": intent.get("kind", "research"),
+        "user_name": name or state.get("user_name", ""),
+    }
+
+
+def route_after_classify(state: PlannerState) -> str:
+    """Anything that isn't explicitly "chat" goes to the planner.
+
+    The two misclassifications are not equally bad: small talk mistaken for
+    a question costs a wasted plan the human can reject, while a real
+    question mistaken for small talk gets a friendly non-answer instead of
+    research. So the fallback is research - a missing or unrecognised intent
+    (a model returning something off-schema) must never land in greet().
+    """
+    return "greet" if state.get("intent") == "chat" else "plan"
+
+
+GREET_PROMPT = (
+    "You are a friendly research assistant talking to someone who is not "
+    "asking a research question yet.\n\n"
+    "Their message: {question}\n"
+    "{name_line}\n"
+    "Reply in 2-3 short sentences: greet them warmly (by name if you know "
+    "it), say in one line that you can research the web, search documents "
+    "they upload, and run calculations, then ask what they would like help "
+    "with. Do not invent facts about them and do not offer anything else."
+)
+
+
+async def greet(state: PlannerState):
+    """The conversational branch's terminal node: answer directly, with no
+    plan, no approval gate, and no specialists.
+
+    Uses chat_llm - the one client with no temperature pinned - because this
+    is generative work like plan()/synthesize(), not a decision.
+
+    It also clears the previous turn's research state. plan() is normally
+    the node that does that (it's the only one guaranteed to run first), but
+    a greeting skips plan() entirely, and /chat reads subtasks and trace
+    straight out of state - so without this, saying "thanks" after a
+    completed research turn would report that turn's plan all over again.
+    """
+    name = state.get("user_name", "")
+    prompt = GREET_PROMPT.format(
+        question=state["question"],
+        name_line=f"They have told you their name is {name}." if name else "",
+    )
+    response = await chat_llm.ainvoke(prompt)
+
+    return {
+        "final_answer": response.content,
+        "subtasks": [],
+        "agenda": [],
+        "results": [],
+        "trace": [],
+        "approved": False,
+        "step_count": 0,
+    }
 
 
 async def plan(state: PlannerState):
@@ -313,13 +410,19 @@ def build_graph(checkpointer: AsyncPostgresSaver) -> CompiledStateGraph:
     unchanged from the original.
     """
     graph_builder = StateGraph(PlannerState)
+    graph_builder.add_node("classify", classify)
+    graph_builder.add_node("greet", greet)
     graph_builder.add_node("plan", plan)
     graph_builder.add_node("human_approval", human_approval)
     graph_builder.add_node("react_step", react_step)
     graph_builder.add_node("reflect", reflect)
     graph_builder.add_node("synthesize", synthesize)
 
-    graph_builder.add_edge(START, "plan")
+    # START -> classify -> greet -> END  (small talk: answered directly)
+    #                   \-> plan -> human_approval -> ...  (unchanged)
+    graph_builder.add_edge(START, "classify")
+    graph_builder.add_conditional_edges("classify", route_after_classify)
+    graph_builder.add_edge("greet", END)
     graph_builder.add_edge("plan", "human_approval")
     graph_builder.add_conditional_edges("human_approval", route_after_approval)
     # act -> observe -> decide. Every path back into react_step goes through

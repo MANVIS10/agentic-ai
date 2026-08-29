@@ -53,7 +53,11 @@ Postgres -> Render backend -> Vercel frontend); there is no numbered
 
 `app/` is a production-style port of `stages/stage25_react_ui/backend/main.py`
 (see `docs/superpowers/plans/2026-08-25-production-package-port.md`),
-tested with pytest under `tests/`. The unit tests there must **not** call the
+tested with pytest under `tests/`. It has since grown behavior the stages
+don't have — most visibly a conversational branch in front of the planner
+(`classify` -> `greet`, so "I'm Manvi" is answered directly instead of
+being planned and sent to the approval gate). These are additive: the HTTP
+contract is unchanged, which `tests/test_schema_parity.py` enforces. The unit tests there must **not** call the
 real OpenAI API — no `.invoke()`/`.embed_*()` on a live
 `ChatOpenAI`/`OpenAIEmbeddings` instance during a normal `pytest tests/` run,
 since that costs money and makes the suite non-deterministic and

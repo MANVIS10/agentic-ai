@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
 import { postApprove, postChat, postReject } from "../api/chat";
-import type { ApiError, SubtaskTrace } from "../api/types";
+import type { ApiError } from "../api/types";
+import { turnFromChatResponse, type ChatTurn } from "./chatTurn";
 
 export type ChatPhase =
   | "idle"
@@ -10,15 +11,9 @@ export type ChatPhase =
   | "completed"
   | "rejected";
 
-export interface ChatTurn {
-  id: string;
-  question: string;
-  status: "awaiting_approval" | "completed" | "rejected";
-  subtasks: string[];
-  approvalPrompt: string | null;
-  finalAnswer: string | null;
-  trace: SubtaskTrace[] | null;
-}
+// Re-exported so ApprovalPanel and MessageList keep importing it from here;
+// it moved to ./chatTurn alongside the pure builder that produces it.
+export type { ChatTurn } from "./chatTurn";
 
 function newThreadId(): string {
   return crypto.randomUUID();
@@ -39,19 +34,14 @@ export function useChat(userId: string | null) {
       setPhase("planning");
       try {
         const response = await postChat({ question, thread_id: threadId });
-        setTurns((prev) => [
-          ...prev,
-          {
-            id: crypto.randomUUID(),
-            question,
-            status: "awaiting_approval",
-            subtasks: response.subtasks ?? [],
-            approvalPrompt: response.approval_prompt,
-            finalAnswer: null,
-            trace: null,
-          },
-        ]);
-        setPhase("awaiting_approval");
+        // A research question comes back "awaiting_approval" and opens the
+        // approval panel, exactly as before. Small talk comes back already
+        // "completed" - classify() answered it in greet() without ever
+        // planning - so it renders straight away and leaves the input live
+        // for the user to reply.
+        const turn = turnFromChatResponse(question, response);
+        setTurns((prev) => [...prev, turn]);
+        setPhase(turn.status);
       } catch (err) {
         setError((err as ApiError).detail);
         setPhase(turns.length > 0 ? "completed" : "idle");
