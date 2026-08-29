@@ -1,6 +1,8 @@
 """The six ChatOpenAI instances and the OpenAIEmbeddings instance, moved
 from stage25_react_ui/backend/main.py (lines 115, 136, 182, 264, 376, 442,
-535). `llm` is renamed to `chat_llm` since it now lives in a module also
+535), plus intent_llm, which has no counterpart there - the conversational
+branch in front of the planner is new in app/. `llm` is renamed to
+`chat_llm` since it now lives in a module also
 named `llm` - the only rename in this module, purely to avoid the awkward
 `app.llm.llm`, behavior identical.
 
