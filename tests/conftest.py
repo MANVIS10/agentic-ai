@@ -39,9 +39,19 @@ def pg_available():
         pytest.skip(f"Postgres not available: {exc}")
 
 
+# CI sets exactly this value (.github/workflows/ci.yml) so that importing
+# app/ succeeds at all: app/llm.py builds its OpenAI clients at module
+# scope, and recent openai SDKs reject a wholly absent credential there.
+# It cannot authenticate anything, so it must still count as "no key"
+# below - otherwise giving CI a Postgres service container would silently
+# unskip these tests and fire real API calls with a key guaranteed to 401.
+CI_PLACEHOLDER_API_KEY = "ci-placeholder-not-a-real-key"
+
+
 @pytest.fixture(scope="session")
 def openai_available():
-    if not os.getenv("OPENAI_API_KEY"):
+    key = os.getenv("OPENAI_API_KEY")
+    if not key or key == CI_PLACEHOLDER_API_KEY:
         pytest.skip("OPENAI_API_KEY not set")
 
 

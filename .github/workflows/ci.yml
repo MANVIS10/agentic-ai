@@ -45,7 +45,22 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # A syntactically present but deliberately unusable key. app/llm.py
+      # constructs its six ChatOpenAI clients and OpenAIEmbeddings at
+      # MODULE scope, and recent openai SDKs raise "Missing credentials"
+      # at construction rather than at first call - so on a clean install
+      # `import app` fails outright without some value here, taking the
+      # whole run down at collection. (A developer's older, already-built
+      # virtualenv does not reproduce this, which is precisely why it
+      # went unnoticed until a clean-room run.)
+      #
+      # No request reaches OpenAI: the one file that makes real calls is
+      # excluded below, and conftest.py treats this exact string as "no
+      # key", so the `openai_available` gate still holds if a Postgres
+      # service container is added here later.
       - name: Run tests
+        env:
+          OPENAI_API_KEY: ci-placeholder-not-a-real-key
         run: pytest tests/ --ignore=tests/test_app_backend.py -q
 
   frontend:
