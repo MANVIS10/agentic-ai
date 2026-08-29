@@ -36,6 +36,11 @@ from typing_extensions import TypedDict
 
 from app.config import settings
 
+# The one client with no temperature set, on purpose. plan(), reflect()
+# and synthesize() are the generative work - decomposing a question and
+# writing the final answer - where some variation is the point. Every
+# other client below is making a decision and pins
+# settings.llm_decision_temperature (0.0) instead.
 chat_llm = ChatOpenAI(
     model=settings.openai_chat_model,
     request_timeout=settings.llm_request_timeout_seconds,
@@ -46,6 +51,7 @@ research_llm = ChatOpenAI(
     model=settings.openai_chat_model,
     request_timeout=settings.llm_request_timeout_seconds,
     max_retries=settings.llm_max_retries,
+    temperature=settings.llm_decision_temperature,
 )
 
 embeddings = OpenAIEmbeddings(model=settings.openai_embedding_model)
@@ -54,12 +60,14 @@ knowledge_llm = ChatOpenAI(
     model=settings.openai_chat_model,
     request_timeout=settings.llm_request_timeout_seconds,
     max_retries=settings.llm_max_retries,
+    temperature=settings.llm_decision_temperature,
 )
 
 analysis_llm = ChatOpenAI(
     model=settings.openai_chat_model,
     request_timeout=settings.llm_request_timeout_seconds,
     max_retries=settings.llm_max_retries,
+    temperature=settings.llm_decision_temperature,
 )
 
 
@@ -78,6 +86,7 @@ supervisor_llm = ChatOpenAI(
     model=settings.openai_chat_model,
     request_timeout=settings.llm_request_timeout_seconds,
     max_retries=settings.llm_max_retries,
+    temperature=settings.llm_decision_temperature,
 ).with_structured_output(Route, method="function_calling")
 
 
@@ -92,4 +101,5 @@ critic_llm = ChatOpenAI(
     model=settings.openai_chat_model,
     request_timeout=settings.llm_request_timeout_seconds,
     max_retries=settings.llm_max_retries,
+    temperature=settings.llm_decision_temperature,
 ).with_structured_output(Review, method="function_calling")

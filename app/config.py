@@ -46,6 +46,20 @@ class Settings(BaseSettings):
     llm_request_timeout_seconds: float = 60.0
     llm_max_retries: int = 2
 
+    # Sampling temperature for the calls that make a DECISION rather than
+    # write prose: the supervisor's route, the critic's verdict, and the
+    # three specialists choosing which tool to call. Those are
+    # classifications, so variety is pure downside - at OpenAI's default of
+    # 1.0 the same subtask could route to a different specialist, and the
+    # same answer draw a different verdict, on two runs of identical input.
+    #
+    # Deliberately not applied to chat_llm (plan/reflect/synthesize), which
+    # is the only genuinely generative work here and is left at the API
+    # default. Note 0.0 means "much more consistent", not "deterministic":
+    # identical prompts can still diverge from batching and floating-point
+    # ordering upstream.
+    llm_decision_temperature: float = 0.0
+
     # Signing key for the bearer tokens app/security/auth.py issues. Left
     # empty by default so local dev and the test suite work with no setup -
     # auth.py generates an ephemeral per-process key in that case. In prod
